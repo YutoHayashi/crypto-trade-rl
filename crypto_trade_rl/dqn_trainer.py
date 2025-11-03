@@ -15,6 +15,8 @@ from lightning.pytorch import Trainer
 from lightning.pytorch import LightningModule
 from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
 
+from lob_transformer import LOBDataset, calculate_target
+
 from environments import Actions, CryptoExchangeEnv
 
 class DeepQNetwork(LightningModule):
@@ -129,6 +131,7 @@ class DQNTrainer:
                  initial_cash: float = 1000000.0,
                  transaction_fee: float = 0.01/100,
                  max_positions: int = 5,
+                 window_size: int = 60,
                  model_path: str = 'models',
                  **kwargs):
         self.gamma = gamma
@@ -143,10 +146,14 @@ class DQNTrainer:
         self.max_positions = max_positions
         self.model_path = model_path
         
-        self.train_df, self.test_df = self.create_df()
+        self.df = self.create_df()
+        self.df = self.prepare_data(self.df)
+        
+        train_cutoff = 0.8
         
         self.env = CryptoExchangeEnv(
-            data=self.train_df,
+            data=self.df,
+            max_steps=int(len(self.df) * train_cutoff),
             initial_cash=self.initial_cash,
             transaction_fee=self.transaction_fee,
             max_positions=self.max_positions,
@@ -154,13 +161,40 @@ class DQNTrainer:
         )
     
     def create_df(self):
-        df = pd.read_csv('csv/board_snapshots.csv')
+        from supabase import create_client, ClientOptions
         
-        train_size = int(len(df) * 0.8)
-        train_df = df.iloc[:train_size].reset_index(drop=True)
-        test_df = df.iloc[train_size:].reset_index(drop=True)
+        supabase_url = os.getenv('SUPABASE_URL')
+        supabase_key = os.getenv('SUPABASE_KEY')
+        supabase_table = os.getenv('SUPABASE_TABLE_FOR_RL')
         
-        return train_df, test_df
+        supabase = create_client(
+            supabase_url,
+            supabase_key,
+            options=ClientOptions(
+                postgrest_client_timeout=604800,
+                storage_client_timeout=604800
+            )
+        )
+        
+        limit = 10000
+        df = pd.concat([pd.DataFrame(
+            supabase.table(supabase_table)
+            .select('*')
+            .limit(limit)
+            .offset(limit * o)
+            .execute()
+            .data
+        ) for o in range(6)])
+        
+        df['target'] = calculate_target(df, steps_ahead=12, threshold=0.01/100)
+        
+        return df
+    
+    def prepare_data(self, df: pd.DataFrame):
+        df['best_ask'] = df['ask_price_1']
+        df['best_bid'] = df['bid_price_1']
+        df = df.filter(items=['mid_price', 'best_ask', 'best_bid'])
+        return df
     
     def train(self):
         print("Training DQN model...")

@@ -2,10 +2,12 @@ from enum import Enum
 from dataclasses import dataclass
 import uuid
 from collections import deque
-import gymnasium as gym
-from gymnasium import spaces
+
 import numpy as np
 import pandas as pd
+
+import gymnasium as gym
+from gymnasium import spaces
 
 class Actions(Enum):
     DO_NOTHING = 0
@@ -86,6 +88,7 @@ class CryptoExchangeEnv(gym.Env):
     
     def __init__(self,
                  data: pd.DataFrame,
+                 max_steps: int,
                  initial_cash: float = 1_000_000,
                  transaction_fee: float = 0.01/100,
                  max_positions: int = 5,
@@ -100,6 +103,7 @@ class CryptoExchangeEnv(gym.Env):
         """
         super().__init__()
         self.data = data
+        self.max_steps = max_steps
         self.initial_cash = initial_cash
         self.transaction_fee = transaction_fee
         self.max_positions = max_positions
@@ -107,9 +111,8 @@ class CryptoExchangeEnv(gym.Env):
         self.feature_columns = feature_columns
         
         self.current_step = 0
-        self.max_step = len(data) - 1
         self.portfolio = Portfolio(initial_cash=self.initial_cash, transaction_fee=self.transaction_fee)
-        self.history = deque(maxlen=self.max_step)
+        self.history = deque(maxlen=self.max_steps)
         self.done = False
         
         self.action_space = spaces.Discrete(len(Actions))
@@ -127,7 +130,7 @@ class CryptoExchangeEnv(gym.Env):
                 raise ValueError(f"Data must contain the column: {required_column}")
     
     def _get_observation(self) -> np.ndarray:
-        if self.current_step <= self.max_step:
+        if self.current_step <= self.max_steps:
             current_data = self.data.iloc[self.current_step]
             
             best_bid = current_data['best_bid']
@@ -181,7 +184,7 @@ class CryptoExchangeEnv(gym.Env):
         
         reward += pnl + hold_reward
         
-        if self.current_step >= self.max_step or self.portfolio.cash <= 0:
+        if self.current_step >= self.max_steps or self.portfolio.cash <= 0:
             self.done = True
         
         self.history.append({
