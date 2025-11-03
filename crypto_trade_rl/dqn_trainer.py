@@ -9,15 +9,28 @@ import pandas as pd
 
 import torch
 import torch.nn as nn
+from torch.utils.data import DataLoader, Dataset
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 from lightning.pytorch import Trainer
 from lightning.pytorch import LightningModule
-from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
+from lightning.pytorch.callbacks import ModelCheckpoint
 
-from lob_transformer import LOBDataset, calculate_target
+from lob_transformer.module import LOBDataset, calculate_target, load_lobtransformer_model
 
-from environments import Actions, CryptoExchangeEnv
+from .environments import Actions, CryptoExchangeEnv
+
+
+class DummyDataset(Dataset):
+    def __init__(self, size: int):
+        self.data = torch.tensor([0 for _ in range(size)], dtype=torch.int8)
+    
+    def __len__(self):
+        return len(self.data)
+    
+    def __getitem__(self, idx):
+        return self.data[idx]
+
 
 class DeepQNetwork(LightningModule):
     def __init__(self,
@@ -28,6 +41,7 @@ class DeepQNetwork(LightningModule):
                  lr: float = 1e-3,
                  buffer_size: int = 100000,
                  batch_size: int = 64,
+                 init_epsilon: float = 1.0,
                  epsilon_decay: float = 0.995,
                  **kwargs):
         super(DeepQNetwork, self).__init__()
@@ -38,6 +52,7 @@ class DeepQNetwork(LightningModule):
         self.lr = lr
         self.buffer_size = buffer_size
         self.batch_size = batch_size
+        self.init_epsilon = init_epsilon
         self.epsilon_decay = epsilon_decay
         
         self.q_net = nn.Sequential(
@@ -62,9 +77,6 @@ class DeepQNetwork(LightningModule):
     def configure_optimizers(self):
         return torch.optim.Adam(self.q_net.parameters(), lr=self.lr)
     
-    def train_dataloader(self):
-        return [None]
-    
     def forward(self, x):
         return self.q_net(x)
     
@@ -76,8 +88,14 @@ class DeepQNetwork(LightningModule):
             return q_values.argmax().item()
     
     def training_step(self, batch, batch_idx):
-        states, actions, rewards, next_states, dones = batch
+        batch = random.sample(self.replay_buffer, self.batch_size)
         
+        states = torch.tensor(np.array([b[0] for b in batch]), dtype=torch.float32)
+        actions = torch.tensor(np.array([b[1] for b in batch]), dtype=torch.long).unsqueeze(1)
+        rewards = torch.tensor(np.array([b[2] for b in batch]), dtype=torch.float32).unsqueeze(1)
+        next_states = torch.tensor(np.array([b[3] for b in batch]), dtype=torch.float32)
+        dones = torch.tensor(np.array([b[4] for b in batch]), dtype=torch.int8).unsqueeze(1)
+
         q_values = self.q_net(states).gather(1, actions)
         next_q_values = self.target_q_net(next_states).max(1)[0].unsqueeze(1).detach()
         target = rewards + (1 - dones) * self.gamma * next_q_values
@@ -94,15 +112,6 @@ class DeepQNetwork(LightningModule):
             next_state, reward, done, info = self.env.step(action)
             self.replay_buffer.append((state, action, reward, next_state, done))
             state = next_state
-
-            if len(self.replay_buffer) >= self.batch_size:
-                batch = random.sample(self.replay_buffer, self.batch_size)
-                states, actions, rewards, next_states, dones = map(
-                    lambda x: torch.tensor(np.array(x), dtype=torch.float32),
-                    zip(*batch)
-                )
-                batch = (states, actions.long().unsqueeze(1), rewards.unsqueeze(1), next_states, dones.unsqueeze(1))
-                self.training_step(batch, 0)
 
 def load_dqn_model(model_path: str) -> DeepQNetwork:
     print("Loading the best model from checkpoint...")
@@ -132,6 +141,7 @@ class DQNTrainer:
                  transaction_fee: float = 0.01/100,
                  max_positions: int = 5,
                  window_size: int = 60,
+                 rolling_window: int = 60,
                  model_path: str = 'models',
                  **kwargs):
         self.gamma = gamma
@@ -144,20 +154,30 @@ class DQNTrainer:
         self.initial_cash = initial_cash
         self.transaction_fee = transaction_fee
         self.max_positions = max_positions
+        self.window_size = window_size
+        self.rolling_window = rolling_window
         self.model_path = model_path
         
         self.df = self.create_df()
         self.df = self.prepare_data(self.df)
         
         train_cutoff = 0.8
+        self.train_df, self.test_df = (
+            self.df.iloc[:int(len(self.df) * train_cutoff)].reset_index(drop=True),
+            self.df.iloc[int(len(self.df) * train_cutoff):].reset_index(drop=True)
+        )
         
         self.env = CryptoExchangeEnv(
-            data=self.df,
-            max_steps=int(len(self.df) * train_cutoff),
+            data=self.train_df,
+            max_steps=int(len(self.train_df)) - 1,
             initial_cash=self.initial_cash,
             transaction_fee=self.transaction_fee,
             max_positions=self.max_positions,
-            feature_columns=self.feature_columns
+            feature_columns=[
+                'probabilities_up',
+                'probabilities_stable',
+                'probabilities_down',
+            ]
         )
     
     def create_df(self):
@@ -176,7 +196,7 @@ class DQNTrainer:
             )
         )
         
-        limit = 10000
+        limit = 1000
         df = pd.concat([pd.DataFrame(
             supabase.table(supabase_table)
             .select('*')
@@ -184,17 +204,50 @@ class DQNTrainer:
             .offset(limit * o)
             .execute()
             .data
-        ) for o in range(6)])
+        ) for o in range(1)])
         
         df['target'] = calculate_target(df, steps_ahead=12, threshold=0.01/100)
         
         return df
     
     def prepare_data(self, df: pd.DataFrame):
+        predictions = self.predict_price_movement(df)
+
+        df = df.iloc[(self.window_size + self.rolling_window) - 1:].copy().reset_index(drop=True)
+        df['probabilities_up'] = [pred[0][0].item() for pred in predictions]
+        df['probabilities_stable'] = [pred[0][1].item() for pred in predictions]
+        df['probabilities_down'] = [pred[0][2].item() for pred in predictions]
         df['best_ask'] = df['ask_price_1']
         df['best_bid'] = df['bid_price_1']
-        df = df.filter(items=['mid_price', 'best_ask', 'best_bid'])
+
+        df = df.filter(items=[
+            'best_ask',
+            'best_bid',
+            'probabilities_up',
+            'probabilities_stable',
+            'probabilities_down',
+        ])
+
         return df
+    
+    def predict_price_movement(self, df: pd.DataFrame):
+        import torch.nn.functional as F
+
+        from lightning.pytorch import Trainer
+        trainer = Trainer(
+            accelerator="gpu" if torch.cuda.is_available() else "cpu",
+            devices=1 if torch.cuda.is_available() else "auto"
+        )
+
+        lob_transformer = load_lobtransformer_model(self.model_path)
+        lob_transformer.eval()
+
+        lob_dataset = LOBDataset(df, window_size=self.window_size)
+        lob_dataloader = lob_dataset.to_dataloader(batch_size=1, shuffle=False)
+
+        predictions = trainer.predict(lob_transformer, lob_dataloader)
+
+        return predictions
     
     def train(self):
         print("Training DQN model...")
@@ -207,36 +260,33 @@ class DQNTrainer:
             lr=self.lr,
             buffer_size=self.buffer_size,
             batch_size=self.batch_size,
+            init_epsilon=self.init_epsilon,
             epsilon_decay=(self.min_epsilon / self.init_epsilon) ** (1 / self.max_episodes * 0.9),
         )
         
-        early_stopping_callback = EarlyStopping(
-            monitor='val_loss',
-            min_delta=1e-6,
-            patience=3,
-            verbose=False,
-            mode='min'
-        )
-        
         checkpoint_callback = ModelCheckpoint(
-            dirpath=os.path.join(os.path.dirname(__file__), self.model_path),
-            filename="dqn-{epoch:02d}-{val_loss:.4f}",
-            monitor="val_loss",
+            dirpath=self.model_path,
+            filename="dqn-{epoch:02d}-{train_loss:.4f}",
+            monitor="train_loss",
             save_top_k=1,
             mode="min",
         )
         
         trainer = Trainer(
-            max_epochs=self.epochs,
+            max_epochs=self.max_episodes,
             accelerator="gpu" if torch.cuda.is_available() else "cpu",
             devices=1 if torch.cuda.is_available() else "auto",
             enable_model_summary=True,
             gradient_clip_val=0.1,
-            callbacks=[early_stopping_callback, checkpoint_callback],
+            callbacks=[checkpoint_callback],
             logger=False
         )
         
-        trainer.fit(dqn)
+        trainer.fit(dqn, train_dataloaders=DataLoader(
+            DummyDataset(size=self.env.max_steps),
+            batch_size=1,
+            shuffle=False
+        ))
         
         return dqn
     
