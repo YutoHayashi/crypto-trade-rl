@@ -1,5 +1,5 @@
 import os
-from collections import deque
+from collections import deque, namedtuple
 import random
 import warnings
 warnings.filterwarnings('ignore')
@@ -21,6 +21,9 @@ from lob_transformer.module import LOBDataset, calculate_target, load_lobtransfo
 from .environments import Actions, CryptoExchangeEnv
 
 
+Transition = namedtuple("Transition", ["state", "action", "reward", "next_state", "done"])
+
+
 class DummyDataset(Dataset):
     def __init__(self, size: int):
         self.data = torch.tensor([0 for _ in range(size)], dtype=torch.int8)
@@ -30,6 +33,20 @@ class DummyDataset(Dataset):
     
     def __getitem__(self, idx):
         return self.data[idx]
+
+
+class ReplayBuffer:
+    def __init__(self, capacity):
+        self.buffer = deque(maxlen=capacity)
+    
+    def push(self, *args):
+        self.buffer.append(Transition(*args))
+    
+    def sample(self, batch_size):
+        return random.sample(self.buffer, batch_size)
+    
+    def __len__(self):
+        return len(self.buffer)
 
 
 class DeepQNetwork(LightningModule):
@@ -42,7 +59,8 @@ class DeepQNetwork(LightningModule):
                  buffer_size: int = 100000,
                  batch_size: int = 64,
                  init_epsilon: float = 1.0,
-                 epsilon_decay: float = 0.995,
+                 min_epsilon: float = 0.01,
+                 epsilon_decay_episodes: int = 800,
                  **kwargs):
         super(DeepQNetwork, self).__init__()
         self.save_hyperparameters()
@@ -55,7 +73,9 @@ class DeepQNetwork(LightningModule):
         self.buffer_size = buffer_size
         self.batch_size = batch_size
         self.init_epsilon = init_epsilon
-        self.epsilon_decay = epsilon_decay
+        self.min_epsilon = min_epsilon
+        self.epsilon_decay_episodes = epsilon_decay_episodes
+        self.tau = 0.01
         
         self.q_net = nn.Sequential(
             nn.Linear(state_size, 128),
@@ -74,10 +94,12 @@ class DeepQNetwork(LightningModule):
         self.target_q_net.load_state_dict(self.q_net.state_dict())
         self.loss_fn = nn.MSELoss()
         
-        self.replay_buffer = deque(maxlen=self.buffer_size)
+        self.replay_buffer = ReplayBuffer(self.buffer_size)
         self.epsilon = self.init_epsilon
         
-        self.total_rewards = 0.0
+        self.state, info = self.env.reset()
+        self.episode_reward = 0.0
+        self.episodes: int = 0
     
     def configure_optimizers(self):
         return torch.optim.Adam(self.q_net.parameters(), lr=self.lr)
@@ -85,45 +107,60 @@ class DeepQNetwork(LightningModule):
     def forward(self, x):
         return self.q_net(x)
     
+    def get_epsilon(self):
+        return self.min_epsilon + (self.init_epsilon - self.min_epsilon) * max(0, (self.epsilon_decay_episodes - self.episodes) / self.epsilon_decay_episodes)
+    
     def choose_action(self, state):
-        if random.random() < self.epsilon:
+        if random.random() < self.get_epsilon():
             return random.randint(0, len(Actions) - 1)
         with torch.no_grad():
             q_values = self(state)
             return q_values.argmax().item()
     
     def training_step(self, batch, batch_idx):
-        batch = random.sample(self.replay_buffer, self.batch_size)
+        if (len(self.replay_buffer) < self.batch_size):
+            return None
         
-        states = torch.tensor(np.array([b[0] for b in batch]), dtype=torch.float32)
-        actions = torch.tensor(np.array([b[1] for b in batch]), dtype=torch.long).unsqueeze(1)
-        rewards = torch.tensor(np.array([b[2] for b in batch]), dtype=torch.float32).unsqueeze(1)
-        next_states = torch.tensor(np.array([b[3] for b in batch]), dtype=torch.float32)
-        dones = torch.tensor(np.array([b[4] for b in batch]), dtype=torch.int8).unsqueeze(1)
+        transition = self.replay_buffer.sample(self.batch_size)
+        batch = Transition(*zip(*transition))
+        
+        states = torch.tensor(batch.state, dtype=torch.float32, device=self.device)
+        actions = torch.tensor(batch.action, dtype=torch.long, device=self.device).unsqueeze(1)
+        rewards = torch.tensor(batch.reward, dtype=torch.float32, device=self.device).unsqueeze(1)
+        next_states = torch.tensor(batch.next_state, dtype=torch.float32, device=self.device)
+        dones = torch.tensor(batch.done, dtype=torch.int8, device=self.device).unsqueeze(1)
         
         q_values = self.q_net(states).gather(1, actions)
         next_q_values = self.target_q_net(next_states).max(1)[0].unsqueeze(1).detach()
         target = rewards + (1 - dones) * self.gamma * next_q_values
-
+        
         loss = self.loss_fn(q_values, target)
-        self.log('train_loss', loss)
-        self.log('total_rewards', self.total_rewards)
+        
+        self.log('train_loss', loss, prog_bar=True)
+        self.log('epsilon', self.get_epsilon(), prog_bar=True)
+        
         return loss
     
     def test_step(self, batch, batch_idx):
         pass
     
-    def on_train_epoch_start(self):
-        self.total_rewards = 0.0
+    def on_train_batch_end(self, outputs, batch, batch_idx):
+        for target_param, local_param in zip(self.target_q_net.parameters(), self.q_net.parameters()):
+            target_param.data.copy_(self.tau * local_param.data + (1.0 - self.tau) * target_param.data)
         
-        state, info = self.env.reset()
-        done = False
-        while not done:
-            action = self.choose_action(torch.tensor(state, dtype=torch.float32).unsqueeze(0))
-            next_state, reward, done, info = self.env.step(action)
-            self.replay_buffer.append((state, action, reward, next_state, done))
-            self.total_rewards += reward
-            state = next_state
+        action = self.choose_action(torch.tensor(self.state, dtype=torch.float32, device=self.device).unsqueeze(0))
+        next_state, reward, done, info = self.env.step(action)
+        
+        self.replay_buffer.push(self.state, action, reward, next_state, done)
+        self.state = next_state
+        self.episode_reward += reward
+        
+        if done:
+            self.episodes += 1
+            self.log('episode', self.episodes, prog_bar=True)
+            self.log('episode_reward', self.episode_reward, prog_bar=True)
+            self.episode_reward = 0.0
+            self.state, info = self.env.reset()
 
 
 def load_dqn_model(model_path: str) -> DeepQNetwork:
@@ -148,7 +185,7 @@ class DQNTrainer:
                  learning_rate: float = 1e-3,
                  buffer_size: int = 100000,
                  batch_size: int = 64,
-                 max_episodes: int = 1000,
+                 max_epochs: int = 1000,
                  init_epsilon: float = 1.0,
                  min_epsilon: float = 0.01,
                  initial_cash: float = 1000000.0,
@@ -162,9 +199,10 @@ class DQNTrainer:
         self.lr = learning_rate
         self.buffer_size = buffer_size
         self.batch_size = batch_size
-        self.max_episodes = max_episodes
+        self.max_epochs = max_epochs
         self.init_epsilon = init_epsilon
         self.min_epsilon = min_epsilon
+        self.epsilon_decay_episodes = int(max_epochs * 0.8)
         self.initial_cash = initial_cash
         self.transaction_fee = transaction_fee
         self.max_positions = max_positions
@@ -273,19 +311,20 @@ class DQNTrainer:
             buffer_size=self.buffer_size,
             batch_size=self.batch_size,
             init_epsilon=self.init_epsilon,
-            epsilon_decay=(self.min_epsilon / self.init_epsilon) ** (1 / self.max_episodes * 0.9),
+            min_epsilon=self.min_epsilon,
+            epsilon_decay_episodes=self.epsilon_decay_episodes
         )
         
         checkpoint_callback = ModelCheckpoint(
             dirpath=self.model_path,
-            filename="dqn-{epoch:02d}-{train_loss:.4f}-{total_rewards:.2f}",
-            monitor="train_loss",
+            filename="dqn-{epoch:02d}-{train_loss:.4f}-{episode_reward:.2f}",
+            monitor="episode_reward",
             save_top_k=1,
-            mode="min",
+            mode="max",
         )
         
         trainer = Trainer(
-            max_epochs=self.max_episodes,
+            max_epochs=self.max_epochs,
             accelerator="gpu" if torch.cuda.is_available() else "cpu",
             devices=1 if torch.cuda.is_available() else "auto",
             enable_model_summary=True,
@@ -295,7 +334,7 @@ class DQNTrainer:
         )
         
         trainer.fit(dqn, train_dataloaders=DataLoader(
-            DummyDataset(size=self.env.max_steps),
+            DummyDataset(size=self.env.max_steps + 1),
             batch_size=1,
             shuffle=False
         ))

@@ -18,7 +18,7 @@ def parse_args() -> dict:
     parser.add_argument('--learning_rate', type=float, required=False, default=1e-3, help='Learning rate for the optimizer.')
     parser.add_argument('--buffer_size', type=int, required=False, default=100000, help='Size of the replay buffer.')
     parser.add_argument('--batch_size', type=int, required=False, default=64, help='Batch size for training.')
-    parser.add_argument('--max_episodes', type=int, required=False, default=1000, help='Maximum number of training episodes.')
+    parser.add_argument('--max_epochs', type=int, required=False, default=1000, help='Maximum number of training epochs.')
     parser.add_argument('--initial_cash', type=float, required=False, default=1000000.0, help='Initial cash for the trading environment.')
     parser.add_argument('--transaction_fee', type=float, required=False, default=0.01/100, help='Transaction fee percentage.')
     parser.add_argument('--max_positions', type=int, required=False, default=5, help='Maximum number of open positions allowed.')
