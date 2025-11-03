@@ -45,6 +45,8 @@ class DeepQNetwork(LightningModule):
                  epsilon_decay: float = 0.995,
                  **kwargs):
         super(DeepQNetwork, self).__init__()
+        self.save_hyperparameters()
+        
         self.env = env
         self.state_size = state_size
         self.action_size = action_size
@@ -70,9 +72,12 @@ class DeepQNetwork(LightningModule):
             nn.Linear(128, action_size)
         )
         self.target_q_net.load_state_dict(self.q_net.state_dict())
+        self.loss_fn = nn.MSELoss()
         
         self.replay_buffer = deque(maxlen=self.buffer_size)
         self.epsilon = self.init_epsilon
+        
+        self.total_rewards = 0.0
     
     def configure_optimizers(self):
         return torch.optim.Adam(self.q_net.parameters(), lr=self.lr)
@@ -95,23 +100,31 @@ class DeepQNetwork(LightningModule):
         rewards = torch.tensor(np.array([b[2] for b in batch]), dtype=torch.float32).unsqueeze(1)
         next_states = torch.tensor(np.array([b[3] for b in batch]), dtype=torch.float32)
         dones = torch.tensor(np.array([b[4] for b in batch]), dtype=torch.int8).unsqueeze(1)
-
+        
         q_values = self.q_net(states).gather(1, actions)
         next_q_values = self.target_q_net(next_states).max(1)[0].unsqueeze(1).detach()
         target = rewards + (1 - dones) * self.gamma * next_q_values
-        
-        loss = nn.functional.mse_loss(q_values, target)
+
+        loss = self.loss_fn(q_values, target)
         self.log('train_loss', loss)
+        self.log('total_rewards', self.total_rewards)
         return loss
     
+    def test_step(self, batch, batch_idx):
+        pass
+    
     def on_train_epoch_start(self):
+        self.total_rewards = 0.0
+        
         state, info = self.env.reset()
         done = False
         while not done:
             action = self.choose_action(torch.tensor(state, dtype=torch.float32).unsqueeze(0))
             next_state, reward, done, info = self.env.step(action)
             self.replay_buffer.append((state, action, reward, next_state, done))
+            self.total_rewards += reward
             state = next_state
+
 
 def load_dqn_model(model_path: str) -> DeepQNetwork:
     print("Loading the best model from checkpoint...")
@@ -127,6 +140,7 @@ def load_dqn_model(model_path: str) -> DeepQNetwork:
     print(f"Loaded model from {checkpoint_path}")
     
     return model
+
 
 class DQNTrainer:
     def __init__(self,
@@ -212,14 +226,14 @@ class DQNTrainer:
     
     def prepare_data(self, df: pd.DataFrame):
         predictions = self.predict_price_movement(df)
-
+        
         df = df.iloc[(self.window_size + self.rolling_window) - 1:].copy().reset_index(drop=True)
         df['probabilities_up'] = [pred[0][0].item() for pred in predictions]
         df['probabilities_stable'] = [pred[0][1].item() for pred in predictions]
         df['probabilities_down'] = [pred[0][2].item() for pred in predictions]
         df['best_ask'] = df['ask_price_1']
         df['best_bid'] = df['bid_price_1']
-
+        
         df = df.filter(items=[
             'best_ask',
             'best_bid',
@@ -227,26 +241,24 @@ class DQNTrainer:
             'probabilities_stable',
             'probabilities_down',
         ])
-
+        
         return df
     
     def predict_price_movement(self, df: pd.DataFrame):
-        import torch.nn.functional as F
-
         from lightning.pytorch import Trainer
         trainer = Trainer(
             accelerator="gpu" if torch.cuda.is_available() else "cpu",
             devices=1 if torch.cuda.is_available() else "auto"
         )
-
+        
         lob_transformer = load_lobtransformer_model(self.model_path)
         lob_transformer.eval()
-
+        
         lob_dataset = LOBDataset(df, window_size=self.window_size)
         lob_dataloader = lob_dataset.to_dataloader(batch_size=1, shuffle=False)
-
+        
         predictions = trainer.predict(lob_transformer, lob_dataloader)
-
+        
         return predictions
     
     def train(self):
@@ -266,7 +278,7 @@ class DQNTrainer:
         
         checkpoint_callback = ModelCheckpoint(
             dirpath=self.model_path,
-            filename="dqn-{epoch:02d}-{train_loss:.4f}",
+            filename="dqn-{epoch:02d}-{train_loss:.4f}-{total_rewards:.2f}",
             monitor="train_loss",
             save_top_k=1,
             mode="min",
