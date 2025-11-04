@@ -137,15 +137,15 @@ class CryptoExchangeEnv(gym.Env):
             best_ask = current_data['best_ask']
             
             features = current_data[self.feature_columns].values.astype(np.float32)
-            cash = self.portfolio.cash / self.initial_cash
-            positions = sum([pos.quantity * (1 if pos.position_type == PositionType.LONG else -1) for pos in self.portfolio.positions])
+            long_positions = sum([pos.quantity for pos in self.portfolio.long_positions])
+            short_positions = sum([pos.quantity for pos in self.portfolio.short_positions])
             unrealized_pnl = self.portfolio.unrealized_pnl(best_bid=best_bid, best_ask=best_ask) / self.initial_cash
             
             return np.concatenate([
                 features,
                 [
-                    cash,
-                    positions,
+                    long_positions,
+                    short_positions,
                     unrealized_pnl
                 ]
             ]).astype(np.float32)
@@ -165,7 +165,7 @@ class CryptoExchangeEnv(gym.Env):
         hold_reward = 0.0
         
         if action == Actions.DO_NOTHING.value:
-            hold_reward = self.portfolio.unrealized_pnl(best_bid=best_bid, best_ask=best_ask) * 0.1
+            hold_reward = self.portfolio.unrealized_pnl(best_bid=best_bid, best_ask=best_ask) * 0.01
         elif action == Actions.BUY_AT_BEST_BID.value:
             if self.portfolio.short_positions:
                 position = self.portfolio.short_positions[0]

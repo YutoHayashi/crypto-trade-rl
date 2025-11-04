@@ -18,7 +18,7 @@ from lightning.pytorch.callbacks import ModelCheckpoint
 
 from lob_transformer.module import LOBDataset, calculate_target, load_lobtransformer_model
 
-from .environments import Actions, CryptoExchangeEnv
+from .environments import Actions, PositionType, CryptoExchangeEnv
 
 
 Transition = namedtuple("Transition", ["state", "action", "reward", "next_state", "done"])
@@ -51,7 +51,6 @@ class ReplayBuffer:
 
 class DeepQNetwork(LightningModule):
     def __init__(self,
-                 env: CryptoExchangeEnv,
                  state_size: int,
                  action_size: int,
                  gamma: float = 0.99,
@@ -65,7 +64,6 @@ class DeepQNetwork(LightningModule):
         super(DeepQNetwork, self).__init__()
         self.save_hyperparameters()
         
-        self.env = env
         self.state_size = state_size
         self.action_size = action_size
         self.gamma = gamma
@@ -96,10 +94,6 @@ class DeepQNetwork(LightningModule):
         
         self.replay_buffer = ReplayBuffer(self.buffer_size)
         self.epsilon = self.init_epsilon
-        
-        self.state, info = self.env.reset()
-        self.episode_reward = 0.0
-        self.episodes: int = 0
     
     def configure_optimizers(self):
         return torch.optim.Adam(self.q_net.parameters(), lr=self.lr)
@@ -144,6 +138,11 @@ class DeepQNetwork(LightningModule):
     def test_step(self, batch, batch_idx):
         pass
     
+    def on_train_start(self):
+        self.state, info = self.env.reset()
+        self.episode_reward = 0.0
+        self.episodes: int = 0
+    
     def on_train_batch_end(self, outputs, batch, batch_idx):
         for target_param, local_param in zip(self.target_q_net.parameters(), self.q_net.parameters()):
             target_param.data.copy_(self.tau * local_param.data + (1.0 - self.tau) * target_param.data)
@@ -161,12 +160,39 @@ class DeepQNetwork(LightningModule):
             self.log('episode_reward', self.episode_reward, prog_bar=True)
             self.episode_reward = 0.0
             self.state, info = self.env.reset()
+    
+    def on_test_start(self):
+        self.state, info = self.env.reset()
+        self.episode_reward = 0.0
+        done = False
+        
+        while not done:
+            state = torch.tensor(self.state, dtype=torch.float32, device=self.device).unsqueeze(0)
+            action = self(state).argmax().item()
+            next_state, reward, done, info = self.env.step(action)
+            
+            self.replay_buffer.push(self.state, action, reward, next_state, done)
+            self.state = next_state
+            self.episode_reward += reward
+        
+        self.log('total_steps', self.env.current_step)
+        self.log('episode_reward', self.episode_reward)
+        self.log('count_action_buy', len([x for x in self.env.history if x['action'] == Actions.BUY_AT_BEST_BID.value or x['action'] == Actions.SELL_AT_BEST_ASK.value]))
+        self.log('count_action_sell', len([x for x in self.env.history if x['action'] == Actions.SELL_AT_BEST_ASK.value or x['action'] == Actions.BUY_AT_BEST_BID.value]))
+        self.log('count_action_hold', len([x for x in self.env.history if x['action'] == Actions.DO_NOTHING.value]))
+        self.log('last_cash', self.env.history[-1]['cash'])
+        self.log('last_long_positions', len([p for p in self.env.portfolio.positions if p.position_type == PositionType.LONG]))
+        self.log('last_short_positions', len([p for p in self.env.portfolio.positions if p.position_type == PositionType.SHORT]))
+        self.log('last_unrealized_pnl', self.env.history[-1]['unrealized_pnl'])
+    
+    def set_env(self, env: CryptoExchangeEnv):
+        self.env = env
 
 
 def load_dqn_model(model_path: str) -> DeepQNetwork:
     print("Loading the best model from checkpoint...")
-    checkpoint_dir = os.path.join(os.path.dirname(__file__), model_path)
-    checkpoint_files = [f for f in os.listdir(checkpoint_dir) if f.endswith('.pth')]
+    checkpoint_dir = model_path
+    checkpoint_files = [f for f in os.listdir(checkpoint_dir) if f.startswith('dqn-') and f.endswith('.ckpt')]
     if not checkpoint_files:
         raise FileNotFoundError("No checkpoint files found in the specified output path.")
     
@@ -202,7 +228,7 @@ class DQNTrainer:
         self.max_epochs = max_epochs
         self.init_epsilon = init_epsilon
         self.min_epsilon = min_epsilon
-        self.epsilon_decay_episodes = int(max_epochs * 0.8)
+        self.epsilon_decay_episodes = int(max_epochs * 0.6)
         self.initial_cash = initial_cash
         self.transaction_fee = transaction_fee
         self.max_positions = max_positions
@@ -217,19 +243,6 @@ class DQNTrainer:
         self.train_df, self.test_df = (
             self.df.iloc[:int(len(self.df) * train_cutoff)].reset_index(drop=True),
             self.df.iloc[int(len(self.df) * train_cutoff):].reset_index(drop=True)
-        )
-        
-        self.env = CryptoExchangeEnv(
-            data=self.train_df,
-            max_steps=int(len(self.train_df)) - 1,
-            initial_cash=self.initial_cash,
-            transaction_fee=self.transaction_fee,
-            max_positions=self.max_positions,
-            feature_columns=[
-                'probabilities_up',
-                'probabilities_stable',
-                'probabilities_down',
-            ]
         )
     
     def create_df(self):
@@ -302,10 +315,22 @@ class DQNTrainer:
     def train(self):
         print("Training DQN model...")
         
+        env = CryptoExchangeEnv(
+            data=self.train_df,
+            max_steps=int(len(self.train_df)) - 1,
+            initial_cash=self.initial_cash,
+            transaction_fee=self.transaction_fee,
+            max_positions=self.max_positions,
+            feature_columns=[
+                'probabilities_up',
+                'probabilities_stable',
+                'probabilities_down',
+            ]
+        )
+        
         dqn = DeepQNetwork(
-            env=self.env,
-            state_size=self.env.observation_space.shape[0],
-            action_size=self.env.action_space.n,
+            state_size=env.observation_space.shape[0],
+            action_size=env.action_space.n,
             gamma=self.gamma,
             lr=self.lr,
             buffer_size=self.buffer_size,
@@ -314,6 +339,8 @@ class DQNTrainer:
             min_epsilon=self.min_epsilon,
             epsilon_decay_episodes=self.epsilon_decay_episodes
         )
+        
+        dqn.set_env(env)
         
         checkpoint_callback = ModelCheckpoint(
             dirpath=self.model_path,
@@ -334,7 +361,7 @@ class DQNTrainer:
         )
         
         trainer.fit(dqn, train_dataloaders=DataLoader(
-            DummyDataset(size=self.env.max_steps + 1),
+            DummyDataset(size=env.max_steps + 1),
             batch_size=1,
             shuffle=False
         ))
@@ -342,4 +369,33 @@ class DQNTrainer:
         return dqn
     
     def evaluate(self, model: DeepQNetwork):
-        pass
+        print("Evaluating DQN model...")
+        
+        env = CryptoExchangeEnv(
+            data=self.test_df,
+            max_steps=int(len(self.test_df)) - 1,
+            initial_cash=self.initial_cash,
+            transaction_fee=self.transaction_fee,
+            max_positions=self.max_positions,
+            feature_columns=[
+                'probabilities_up',
+                'probabilities_stable',
+                'probabilities_down',
+            ]
+        )
+        model.set_env(env)
+
+        trainer = Trainer(
+            logger=False,
+            accelerator="gpu" if torch.cuda.is_available() else "cpu",
+            devices=1 if torch.cuda.is_available() else "auto",
+        )
+        
+        result = trainer.test(
+            model,
+            dataloaders=DataLoader(
+                DummyDataset(size=env.max_steps + 1),
+                batch_size=1,
+                shuffle=False
+            )
+        )
