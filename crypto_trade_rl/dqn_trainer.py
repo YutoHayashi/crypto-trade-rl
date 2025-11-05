@@ -12,6 +12,10 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
+from torchrl.data import TensorDictReplayBuffer, ListStorage
+from torchrl.data.replay_buffers.samplers import PrioritizedSampler
+from tensordict import TensorDict
+
 from lightning.pytorch import Trainer
 from lightning.pytorch import LightningModule
 from lightning.pytorch.callbacks import ModelCheckpoint
@@ -19,9 +23,6 @@ from lightning.pytorch.callbacks import ModelCheckpoint
 from lob_transformer.module import LOBDataset, calculate_target, load_lobtransformer_model
 
 from .environments import Actions, PositionType, CryptoExchangeEnv
-
-
-Transition = namedtuple("Transition", ["state", "action", "reward", "next_state", "done"])
 
 
 class DummyDataset(Dataset):
@@ -33,20 +34,6 @@ class DummyDataset(Dataset):
     
     def __getitem__(self, idx):
         return self.data[idx]
-
-
-class ReplayBuffer:
-    def __init__(self, capacity):
-        self.buffer = deque(maxlen=capacity)
-    
-    def push(self, *args):
-        self.buffer.append(Transition(*args))
-    
-    def sample(self, batch_size):
-        return random.sample(self.buffer, batch_size)
-    
-    def __len__(self):
-        return len(self.buffer)
 
 
 class DeepQNetwork(LightningModule):
@@ -92,7 +79,11 @@ class DeepQNetwork(LightningModule):
         self.target_q_net.load_state_dict(self.q_net.state_dict())
         self.loss_fn = nn.MSELoss()
         
-        self.replay_buffer = ReplayBuffer(self.buffer_size)
+        self.replay_buffer = TensorDictReplayBuffer(
+            storage=ListStorage(max_size=buffer_size),
+            sampler=PrioritizedSampler(max_capacity=buffer_size, alpha=0.6, beta=0.4),
+            batch_size=self.buffer_size
+        )
         self.epsilon = self.init_epsilon
     
     def configure_optimizers(self):
@@ -104,6 +95,23 @@ class DeepQNetwork(LightningModule):
     def get_epsilon(self):
         return self.min_epsilon + (self.init_epsilon - self.min_epsilon) * max(0, (self.epsilon_decay_episodes - self.episodes) / self.epsilon_decay_episodes)
     
+    def memorize_experience(self, state, action, reward, next_state, done):
+        state_tensor = torch.as_tensor(state, dtype=torch.float32)
+        action_tensor = torch.as_tensor(action, dtype=torch.long)
+        reward_tensor = torch.as_tensor(reward, dtype=torch.float32)
+        next_state_tensor = torch.as_tensor(next_state, dtype=torch.float32)
+        done_tensor = torch.as_tensor(done, dtype=torch.int8)
+        
+        tensor_dict = TensorDict({
+            'state': state_tensor,
+            'action': action_tensor,
+            'reward': reward_tensor,
+            'next_state': next_state_tensor,
+            'done': done_tensor
+        }).to(self.device)
+        
+        self.replay_buffer.add(tensor_dict)
+
     def choose_action(self, state):
         if random.random() < self.get_epsilon():
             return random.randint(0, len(Actions) - 1)
@@ -115,20 +123,25 @@ class DeepQNetwork(LightningModule):
         if (len(self.replay_buffer) < self.batch_size):
             return None
         
-        transition = self.replay_buffer.sample(self.batch_size)
-        batch = Transition(*zip(*transition))
+        sample, info = self.replay_buffer.sample(self.batch_size, return_info=True)
+        indices = info['index']
         
-        states = torch.tensor(batch.state, dtype=torch.float32, device=self.device)
-        actions = torch.tensor(batch.action, dtype=torch.long, device=self.device).unsqueeze(1)
-        rewards = torch.tensor(batch.reward, dtype=torch.float32, device=self.device).unsqueeze(1)
-        next_states = torch.tensor(batch.next_state, dtype=torch.float32, device=self.device)
-        dones = torch.tensor(batch.done, dtype=torch.int8, device=self.device).unsqueeze(1)
+        states = sample['state']
+        actions = sample['action'].unsqueeze(1)
+        rewards = sample['reward'].unsqueeze(1)
+        next_states = sample['next_state']
+        dones = sample['done'].unsqueeze(1)
         
         q_values = self.q_net(states).gather(1, actions)
         next_q_values = self.target_q_net(next_states).max(1)[0].unsqueeze(1).detach()
         target = rewards + (1 - dones) * self.gamma * next_q_values
         
+        td_error = torch.abs(q_values - target).detach()
+        priorities = torch.clamp(td_error, min=1e-8, max=10.0)
+        
         loss = self.loss_fn(q_values, target)
+        
+        self.replay_buffer.update_priority(indices, priorities)
         
         self.log('train_loss', loss, prog_bar=True)
         self.log('epsilon', self.get_epsilon(), prog_bar=True)
@@ -150,7 +163,8 @@ class DeepQNetwork(LightningModule):
         action = self.choose_action(torch.tensor(self.state, dtype=torch.float32, device=self.device).unsqueeze(0))
         next_state, reward, done, info = self.env.step(action)
         
-        self.replay_buffer.push(self.state, action, reward, next_state, done)
+        self.memorize_experience(self.state, action, reward, next_state, done)
+        
         self.state = next_state
         self.episode_reward += reward
         
@@ -171,7 +185,6 @@ class DeepQNetwork(LightningModule):
             action = self(state).argmax().item()
             next_state, reward, done, info = self.env.step(action)
             
-            self.replay_buffer.push(self.state, action, reward, next_state, done)
             self.state = next_state
             self.episode_reward += reward
         
@@ -228,7 +241,7 @@ class DQNTrainer:
         self.max_epochs = max_epochs
         self.init_epsilon = init_epsilon
         self.min_epsilon = min_epsilon
-        self.epsilon_decay_episodes = int(max_epochs * 0.6)
+        self.epsilon_decay_episodes = int(max_epochs * 0.8)
         self.initial_cash = initial_cash
         self.transaction_fee = transaction_fee
         self.max_positions = max_positions
