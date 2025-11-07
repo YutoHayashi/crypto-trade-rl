@@ -110,13 +110,18 @@ class DeepQNetwork(LightningModule):
         }).to(self.device)
         
         self.replay_buffer.add(tensor_dict)
-
+    
     def choose_action(self, state):
         if random.random() < self.get_epsilon():
             return random.randint(0, len(Actions) - 1)
         with torch.no_grad():
             q_values = self(state)
             return q_values.argmax().item()
+    
+    def on_train_start(self):
+        self.state, info = self.env.reset()
+        self.episode_reward = 0.0
+        self.episodes: int = 0
     
     def training_step(self, batch, batch_idx):
         if (len(self.replay_buffer) < self.batch_size):
@@ -140,20 +145,12 @@ class DeepQNetwork(LightningModule):
         
         loss = self.loss_fn(q_values, target)
         
-        self.replay_buffer.update_priority(indices, priorities)
+        self.replay_buffer.update_priority(indices, priorities)  # これここでいいのか微妙なところ...
         
         self.log('train_loss', loss, prog_bar=True)
         self.log('epsilon', self.get_epsilon(), prog_bar=True)
         
         return loss
-    
-    def test_step(self, batch, batch_idx):
-        pass
-    
-    def on_train_start(self):
-        self.state, info = self.env.reset()
-        self.episode_reward = 0.0
-        self.episodes: int = 0
     
     def on_train_batch_end(self, outputs, batch, batch_idx):
         for target_param, local_param in zip(self.target_q_net.parameters(), self.q_net.parameters()):
@@ -168,11 +165,18 @@ class DeepQNetwork(LightningModule):
         self.episode_reward += reward
         
         if done:
-            self.episodes += 1
-            self.log('episode', self.episodes, prog_bar=True)
             self.log('episode_reward', self.episode_reward, prog_bar=True)
             self.episode_reward = 0.0
+            
+            self.episodes += 1
+            self.log('episode', self.episodes, prog_bar=True)
+            
             self.state, info = self.env.reset()
+    
+    def on_train_epoch_end(self):
+        losses = [o["loss"] for o in self.training_step_outputs if o is not None]
+        total_loss = torch.stack(losses).sum()
+        self.log("epoch_loss", total_loss, prog_bar=True)
     
     def on_test_start(self):
         self.state, info = self.env.reset()
@@ -196,6 +200,9 @@ class DeepQNetwork(LightningModule):
         self.log('last_long_positions', len([p for p in self.env.portfolio.positions if p.position_type == PositionType.LONG]))
         self.log('last_short_positions', len([p for p in self.env.portfolio.positions if p.position_type == PositionType.SHORT]))
         self.log('last_unrealized_pnl', self.env.history[-1]['unrealized_pnl'])
+    
+    def test_step(self, batch, batch_idx):
+        pass
     
     def set_env(self, env: CryptoExchangeEnv):
         self.env = env
@@ -356,10 +363,10 @@ class DQNTrainer:
         
         checkpoint_callback = ModelCheckpoint(
             dirpath=self.model_path,
-            filename="dqn-{epoch:02d}-{train_loss:.4f}-{episode_reward:.2f}",
-            monitor="episode_reward",
+            filename="dqn-{epoch:02d}-{epoch_loss:.4f}-{episode_reward:.2f}",
+            monitor="epoch_loss",
             save_top_k=1,
-            mode="max",
+            mode="min",
         )
         
         trainer = Trainer(
