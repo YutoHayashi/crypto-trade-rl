@@ -1,5 +1,4 @@
 import os
-from collections import deque, namedtuple
 import random
 import warnings
 warnings.filterwarnings('ignore')
