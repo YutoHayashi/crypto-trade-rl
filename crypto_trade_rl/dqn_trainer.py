@@ -123,6 +123,9 @@ class DeepQNetwork(LightningModule):
         self.episode_reward = 0.0
         self.episodes: int = 0
     
+    def on_train_epoch_start(self):
+        self.losses = []
+    
     def training_step(self, batch, batch_idx):
         if (len(self.replay_buffer) < self.batch_size):
             return None
@@ -144,6 +147,7 @@ class DeepQNetwork(LightningModule):
         priorities = torch.clamp(td_error, min=1e-8, max=10.0)
         
         loss = self.loss_fn(q_values, target)
+        self.losses.append(loss)
         
         self.replay_buffer.update_priority(indices, priorities)  # これここでいいのか微妙なところ...
         
@@ -174,8 +178,7 @@ class DeepQNetwork(LightningModule):
             self.state, info = self.env.reset()
     
     def on_train_epoch_end(self):
-        losses = [o["loss"] for o in self.training_step_outputs if o is not None]
-        total_loss = torch.stack(losses).sum()
+        total_loss = torch.stack(self.losses).sum()
         self.log("epoch_loss", total_loss, prog_bar=True)
     
     def on_test_start(self):
