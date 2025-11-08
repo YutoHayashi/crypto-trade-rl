@@ -367,9 +367,9 @@ class DQNTrainer:
         checkpoint_callback = ModelCheckpoint(
             dirpath=self.model_path,
             filename="dqn-{epoch:02d}-{epoch_loss:.4f}-{episode_reward:.2f}",
-            monitor="epoch_loss",
+            monitor="episode",
             save_top_k=1,
-            mode="min",
+            mode="max",
         )
         
         trainer = Trainer(
