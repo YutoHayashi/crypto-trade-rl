@@ -22,6 +22,7 @@ def parse_args() -> dict:
     parser.add_argument('--initial_cash', type=float, required=False, default=1000000.0, help='Initial cash for the trading environment.')
     parser.add_argument('--transaction_fee', type=float, required=False, default=0.01/100, help='Transaction fee percentage.')
     parser.add_argument('--max_positions', type=int, required=False, default=5, help='Maximum number of open positions allowed.')
+    parser.add_argument('--ckpt_path', type=str, required=False, default=None, help='Path to a checkpoint file to resume training or for evaluation.')
     parser.add_argument('--mode', type=str, choices=['train_and_eval', 'train', 'eval'], required=False, default='train_and_eval', help='Mode: train or evaluate.')
     
     args = parser.parse_args()

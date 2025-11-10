@@ -242,6 +242,7 @@ class DQNTrainer:
                  window_size: int = 60,
                  rolling_window: int = 60,
                  model_path: str = 'models',
+                 ckpt_path: str = None,
                  **kwargs):
         self.gamma = gamma
         self.lr = learning_rate
@@ -257,6 +258,7 @@ class DQNTrainer:
         self.window_size = window_size
         self.rolling_window = rolling_window
         self.model_path = model_path
+        self.ckpt_path = ckpt_path
         
         self.df = self.create_df()
         self.df = self.prepare_data(self.df)
@@ -385,8 +387,8 @@ class DQNTrainer:
         trainer.fit(dqn, train_dataloaders=DataLoader(
             DummyDataset(size=env.max_steps + 1),
             batch_size=1,
-            shuffle=False
-        ))
+            shuffle=False,
+        ), ckpt_path=self.ckpt_path)
         
         return dqn
     
