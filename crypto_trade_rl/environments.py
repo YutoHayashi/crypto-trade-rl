@@ -116,7 +116,7 @@ class CryptoExchangeEnv(gym.Env):
         self.done = False
         
         self.action_space = spaces.Discrete(len(Actions))
-        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(len(self.feature_columns)+3,), dtype=np.float32)
+        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(len(self.feature_columns)+2,), dtype=np.float32)
         
         self._validate_data()
     
@@ -137,14 +137,12 @@ class CryptoExchangeEnv(gym.Env):
             best_ask = current_data['best_ask']
             
             features = current_data[self.feature_columns].values.astype(np.float32)
-            cash = self.portfolio.cash / self.initial_cash
             positions = sum([pos.quantity * (1 if pos.position_type == PositionType.LONG else -1) for pos in self.portfolio.positions])
             unrealized_pnl = self.portfolio.unrealized_pnl(best_bid=best_bid, best_ask=best_ask) / self.initial_cash
             
             return np.concatenate([
                 features,
                 [
-                    cash,
                     positions,
                     unrealized_pnl
                 ]
