@@ -3,7 +3,6 @@ import random
 import warnings
 warnings.filterwarnings('ignore')
 
-import numpy as np
 import pandas as pd
 
 import torch
@@ -21,7 +20,7 @@ from lightning.pytorch.callbacks import ModelCheckpoint
 
 from lob_transformer.module import LOBDataset, calculate_target, load_lobtransformer_model
 
-from .environments import Actions, PositionType, CryptoExchangeEnv
+from .environment import Actions, PositionType, CryptoExchangeEnv
 
 
 class DummyDataset(Dataset):
@@ -90,6 +89,12 @@ class DeepQNetwork(LightningModule):
     
     def forward(self, x):
         return self.q_net(x)
+    
+    def on_save_checkpoint(self, checkpoint):
+        checkpoint['episodes'] = self.episodes
+    
+    def on_load_checkpoint(self, checkpoint):
+        self.episodes = checkpoint['episodes']
     
     def get_epsilon(self):
         return self.min_epsilon + (self.init_epsilon - self.min_epsilon) * max(0, (self.epsilon_decay_episodes - self.episodes) / self.epsilon_decay_episodes)
@@ -196,8 +201,8 @@ class DeepQNetwork(LightningModule):
         
         self.log('total_steps', self.env.current_step)
         self.log('episode_reward', self.episode_reward)
-        self.log('count_action_buy', len([x for x in self.env.history if x['action'] == Actions.BUY_AT_BEST_BID.value or x['action'] == Actions.SELL_AT_BEST_ASK.value]))
-        self.log('count_action_sell', len([x for x in self.env.history if x['action'] == Actions.SELL_AT_BEST_ASK.value or x['action'] == Actions.BUY_AT_BEST_BID.value]))
+        self.log('count_action_buy', len([x for x in self.env.history if x['action'] == Actions.BUY_AT_BEST_BID.value]))
+        self.log('count_action_sell', len([x for x in self.env.history if x['action'] == Actions.SELL_AT_BEST_ASK.value]))
         self.log('count_action_hold', len([x for x in self.env.history if x['action'] == Actions.DO_NOTHING.value]))
         self.log('last_cash', self.env.history[-1]['cash'])
         self.log('last_long_positions', len([p for p in self.env.portfolio.positions if p.position_type == PositionType.LONG]))
@@ -242,6 +247,7 @@ class DQNTrainer:
                  window_size: int = 60,
                  rolling_window: int = 60,
                  model_path: str = 'models',
+                 num_of_samples: int = 10000,
                  ckpt_path: str = None,
                  **kwargs):
         self.gamma = gamma
@@ -258,6 +264,7 @@ class DQNTrainer:
         self.window_size = window_size
         self.rolling_window = rolling_window
         self.model_path = model_path
+        self.num_of_samples = num_of_samples
         self.ckpt_path = ckpt_path
         
         self.df = self.create_df()
@@ -285,7 +292,7 @@ class DQNTrainer:
             )
         )
         
-        limit = 1000
+        limit = 10000
         df = pd.concat([pd.DataFrame(
             supabase.table(supabase_table)
             .select('*')
@@ -293,7 +300,7 @@ class DQNTrainer:
             .offset(limit * o)
             .execute()
             .data
-        ) for o in range(1)])
+        ) for o in range(self.num_of_samples // limit)])
         
         df['target'] = calculate_target(df, steps_ahead=12, threshold=0.01/100)
         

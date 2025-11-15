@@ -8,7 +8,7 @@ import json
 from dotenv import load_dotenv
 load_dotenv()
 
-from .dqn_trainer import DQNTrainer, load_dqn_model
+from .dqn import DQNTrainer, load_dqn_model
 
 def parse_args() -> dict:
     parser = argparse.ArgumentParser(description="Train or evaluate a DQN model for crypto trading.")

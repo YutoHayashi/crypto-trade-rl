@@ -1,5 +1,6 @@
 from enum import Enum
 from dataclasses import dataclass
+import random
 import uuid
 from collections import deque
 
@@ -138,7 +139,7 @@ class CryptoExchangeEnv(gym.Env):
             
             features = current_data[self.feature_columns].values.astype(np.float32)
             positions = sum([pos.quantity * (1 if pos.position_type == PositionType.LONG else -1) for pos in self.portfolio.positions])
-            unrealized_pnl = self.portfolio.unrealized_pnl(best_bid=best_bid, best_ask=best_ask) / self.initial_cash
+            unrealized_pnl = self.portfolio.unrealized_pnl(best_bid=best_bid, best_ask=best_ask) / 1_000
             
             return np.concatenate([
                 features,
@@ -177,10 +178,13 @@ class CryptoExchangeEnv(gym.Env):
             elif len(self.portfolio.positions) < self.max_positions:
                 self.portfolio.open_position(PositionType.SHORT, quantity=0.01, price=best_ask)
         
-        if pnl > 0:
+        if pnl >= 500:
             pnl *= self.profit_reward_weight
+            reward += pnl
+        elif pnl <= 0:
+            reward += pnl
         
-        reward += pnl + hold_reward
+        reward += hold_reward
         
         if self.current_step >= self.max_steps or self.portfolio.cash <= 0:
             self.done = True
