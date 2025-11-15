@@ -244,8 +244,7 @@ class DQNTrainer:
                  initial_cash: float = 1000000.0,
                  transaction_fee: float = 0.01/100,
                  max_positions: int = 5,
-                 window_size: int = 60,
-                 rolling_window: int = 60,
+                 window_size: int = 120,
                  model_path: str = 'models',
                  num_of_samples: int = 10000,
                  ckpt_path: str = None,
@@ -262,7 +261,6 @@ class DQNTrainer:
         self.transaction_fee = transaction_fee
         self.max_positions = max_positions
         self.window_size = window_size
-        self.rolling_window = rolling_window
         self.model_path = model_path
         self.num_of_samples = num_of_samples
         self.ckpt_path = ckpt_path
@@ -302,14 +300,14 @@ class DQNTrainer:
             .data
         ) for o in range(self.num_of_samples // limit)])
         
-        df['target'] = calculate_target(df, steps_ahead=12, threshold=0.01/100)
+        df['target'] = calculate_target(df, steps_ahead=60, threshold=0.1/100)
         
         return df
     
     def prepare_data(self, df: pd.DataFrame):
         predictions = self.predict_price_movement(df)
         
-        df = df.iloc[(self.window_size + self.rolling_window) - 1:].copy().reset_index(drop=True)
+        df = df.iloc[(self.window_size) - 1:].copy().reset_index(drop=True)
         df['probabilities_up'] = [pred[0][0].item() for pred in predictions]
         df['probabilities_stable'] = [pred[0][1].item() for pred in predictions]
         df['probabilities_down'] = [pred[0][2].item() for pred in predictions]
