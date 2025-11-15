@@ -307,7 +307,7 @@ class DQNTrainer:
     def prepare_data(self, df: pd.DataFrame):
         predictions = self.predict_price_movement(df)
         
-        df = df.iloc[(self.window_size):].copy().reset_index(drop=True)
+        df = df.iloc[(self.window_size) - 1:].copy().reset_index(drop=True)
         df['probabilities_up'] = [pred[0][0].item() for pred in predictions]
         df['probabilities_stable'] = [pred[0][1].item() for pred in predictions]
         df['probabilities_down'] = [pred[0][2].item() for pred in predictions]
