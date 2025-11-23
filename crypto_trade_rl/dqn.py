@@ -246,7 +246,7 @@ class DQNTrainer:
                  max_positions: int = 5,
                  window_size: int = 120,
                  model_path: str = 'models',
-                 num_of_samples: int = 10000,
+                 csv_path: str = 'csv/train.csv',
                  ckpt_path: str = None,
                  **kwargs):
         self.gamma = gamma
@@ -262,47 +262,11 @@ class DQNTrainer:
         self.max_positions = max_positions
         self.window_size = window_size
         self.model_path = model_path
-        self.num_of_samples = num_of_samples
+        self.csv_path = csv_path
         self.ckpt_path = ckpt_path
         
-        self.df = self.create_df()
+        self.df = pd.read_csv(self.csv_path)
         self.df = self.prepare_data(self.df)
-        
-        train_cutoff = 0.8
-        self.train_df, self.test_df = (
-            self.df.iloc[:int(len(self.df) * train_cutoff)].reset_index(drop=True),
-            self.df.iloc[int(len(self.df) * train_cutoff):].reset_index(drop=True)
-        )
-    
-    def create_df(self):
-        from supabase import create_client, ClientOptions
-        
-        supabase_url = os.getenv('SUPABASE_URL')
-        supabase_key = os.getenv('SUPABASE_KEY')
-        supabase_table = os.getenv('SUPABASE_TABLE_FOR_RL')
-        
-        supabase = create_client(
-            supabase_url,
-            supabase_key,
-            options=ClientOptions(
-                postgrest_client_timeout=604800,
-                storage_client_timeout=604800
-            )
-        )
-        
-        limit = 10000
-        df = pd.concat([pd.DataFrame(
-            supabase.table(supabase_table)
-            .select('*')
-            .limit(limit)
-            .offset(limit * o)
-            .execute()
-            .data
-        ) for o in range(self.num_of_samples // limit)])
-        
-        df['target'] = calculate_target(df, steps_ahead=60, threshold=0.1/100)
-        
-        return df
     
     def prepare_data(self, df: pd.DataFrame):
         predictions = self.predict_price_movement(df)
@@ -345,8 +309,8 @@ class DQNTrainer:
         print("Training DQN model...")
         
         env = CryptoExchangeEnv(
-            data=self.train_df,
-            max_steps=int(len(self.train_df)) - 1,
+            data=self.df,
+            max_steps=int(len(self.df)) - 1,
             initial_cash=self.initial_cash,
             transaction_fee=self.transaction_fee,
             max_positions=self.max_positions,
@@ -401,8 +365,8 @@ class DQNTrainer:
         print("Evaluating DQN model...")
         
         env = CryptoExchangeEnv(
-            data=self.test_df,
-            max_steps=int(len(self.test_df)) - 1,
+            data=self.df,
+            max_steps=int(len(self.df)) - 1,
             initial_cash=self.initial_cash,
             transaction_fee=self.transaction_fee,
             max_positions=self.max_positions,
