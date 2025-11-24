@@ -18,8 +18,6 @@ from lightning.pytorch import Trainer
 from lightning.pytorch import LightningModule
 from lightning.pytorch.callbacks import ModelCheckpoint
 
-from lob_transformer.module import LOBDataset, calculate_target, load_lobtransformer_model
-
 from .environment import Actions, PositionType, CryptoExchangeEnv
 
 
@@ -38,13 +36,13 @@ class DeepQNetwork(LightningModule):
     def __init__(self,
                  state_size: int,
                  action_size: int,
-                 gamma: float = 0.99,
-                 lr: float = 1e-3,
-                 buffer_size: int = 100000,
-                 batch_size: int = 64,
-                 init_epsilon: float = 1.0,
-                 min_epsilon: float = 0.01,
-                 epsilon_decay_episodes: int = 800,
+                 gamma: float,
+                 lr: float,
+                 buffer_size: int,
+                 batch_size: int,
+                 init_epsilon: float,
+                 min_epsilon: float,
+                 epsilon_decay_episodes: int,
                  **kwargs):
         super(DeepQNetwork, self).__init__()
         self.save_hyperparameters()
@@ -234,23 +232,25 @@ def load_dqn_model(model_path: str) -> DeepQNetwork:
 
 class DQNTrainer:
     def __init__(self,
-                 gamma: float = 0.99,
-                 learning_rate: float = 1e-3,
-                 buffer_size: int = 100000,
-                 batch_size: int = 64,
-                 max_epochs: int = 1000,
-                 init_epsilon: float = 1.0,
-                 min_epsilon: float = 0.01,
-                 initial_cash: float = 1000000.0,
-                 transaction_fee: float = 0.01/100,
-                 max_positions: int = 5,
-                 window_size: int = 120,
-                 model_path: str = 'models',
-                 csv_path: str = 'csv/train.csv',
+                 df: pd.DataFrame,
+                 gamma: float,
+                 lr: float,
+                 buffer_size: int,
+                 batch_size: int,
+                 max_epochs: int,
+                 init_epsilon: float,
+                 min_epsilon: float,
+                 initial_cash: float,
+                 transaction_fee: float,
+                 max_positions: int,
+                 profit_reward_weight: float,
+                 penalty_reward_weight: float,
+                 model_path: str,
                  ckpt_path: str = None,
                  **kwargs):
+        self.df = df
         self.gamma = gamma
-        self.lr = learning_rate
+        self.lr = lr
         self.buffer_size = buffer_size
         self.batch_size = batch_size
         self.max_epochs = max_epochs
@@ -260,50 +260,10 @@ class DQNTrainer:
         self.initial_cash = initial_cash
         self.transaction_fee = transaction_fee
         self.max_positions = max_positions
-        self.window_size = window_size
+        self.profit_reward_weight = profit_reward_weight
+        self.penalty_reward_weight = penalty_reward_weight
         self.model_path = model_path
-        self.csv_path = csv_path
         self.ckpt_path = ckpt_path
-        
-        self.df = pd.read_csv(self.csv_path)
-        self.df = self.prepare_data(self.df)
-    
-    def prepare_data(self, df: pd.DataFrame):
-        predictions = self.predict_price_movement(df)
-        
-        df = df.iloc[(self.window_size) - 1:].copy().reset_index(drop=True)
-        df['probabilities_up'] = [pred[0][0].item() for pred in predictions]
-        df['probabilities_stable'] = [pred[0][1].item() for pred in predictions]
-        df['probabilities_down'] = [pred[0][2].item() for pred in predictions]
-        df['best_ask'] = df['ask_price_1']
-        df['best_bid'] = df['bid_price_1']
-        
-        df = df.filter(items=[
-            'best_ask',
-            'best_bid',
-            'probabilities_up',
-            'probabilities_stable',
-            'probabilities_down',
-        ])
-        
-        return df
-    
-    def predict_price_movement(self, df: pd.DataFrame):
-        from lightning.pytorch import Trainer
-        trainer = Trainer(
-            accelerator="gpu" if torch.cuda.is_available() else "cpu",
-            devices=1 if torch.cuda.is_available() else "auto"
-        )
-        
-        lob_transformer = load_lobtransformer_model(self.model_path)
-        lob_transformer.eval()
-        
-        lob_dataset = LOBDataset(df, window_size=self.window_size)
-        lob_dataloader = lob_dataset.to_dataloader(batch_size=1, shuffle=False)
-        
-        predictions = trainer.predict(lob_transformer, lob_dataloader)
-        
-        return predictions
     
     def train(self):
         print("Training DQN model...")
@@ -314,11 +274,9 @@ class DQNTrainer:
             initial_cash=self.initial_cash,
             transaction_fee=self.transaction_fee,
             max_positions=self.max_positions,
-            feature_columns=[
-                'probabilities_up',
-                'probabilities_stable',
-                'probabilities_down',
-            ]
+            profit_reward_weight=self.profit_reward_weight,
+            penalty_reward_weight=self.penalty_reward_weight,
+            feature_columns=self.df.columns.difference(['best_ask', 'best_bid']).tolist()
         )
         
         dqn = DeepQNetwork(
@@ -359,9 +317,12 @@ class DQNTrainer:
             shuffle=False,
         ), ckpt_path=self.ckpt_path)
         
-        return dqn
+        return (
+            dqn,
+            checkpoint_callback
+        )
     
-    def evaluate(self, model: DeepQNetwork):
+    def evaluate(self, model_path: str):
         print("Evaluating DQN model...")
         
         env = CryptoExchangeEnv(
@@ -370,12 +331,12 @@ class DQNTrainer:
             initial_cash=self.initial_cash,
             transaction_fee=self.transaction_fee,
             max_positions=self.max_positions,
-            feature_columns=[
-                'probabilities_up',
-                'probabilities_stable',
-                'probabilities_down',
-            ]
+            profit_reward_weight=self.profit_reward_weight,
+            penalty_reward_weight=self.penalty_reward_weight,
+            feature_columns=self.df.columns.difference(['best_ask', 'best_bid']).tolist()
         )
+        
+        model = DeepQNetwork.load_from_checkpoint(model_path, map_location='cuda' if torch.cuda.is_available() else 'cpu')
         model.set_env(env)
 
         trainer = Trainer(
@@ -384,7 +345,7 @@ class DQNTrainer:
             devices=1 if torch.cuda.is_available() else "auto",
         )
         
-        result = trainer.test(
+        return trainer.test(
             model,
             dataloaders=DataLoader(
                 DummyDataset(size=env.max_steps + 1),

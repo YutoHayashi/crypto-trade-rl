@@ -1,38 +1,17 @@
 {
-    "minimum": {
+    "debug": {
+        "csv_path": "csv/debug_data.csv",
         "gamma": 0.99,
-        "learning_rate": 1e-3,
+        "lr": 1e-3,
         "buffer_size": 100000,
         "batch_size": 32,
         "max_epochs": 10,
         "init_epsilon": 1.0,
         "min_epsilon": 0.01,
         "initial_cash": 100000.0,
-        "max_positions": 3,
-        "transaction_fee": 0.000
-    },
-    "dev": {
-        "gamma": 0.99,
-        "learning_rate": 1e-3,
-        "buffer_size": 500000,
-        "batch_size": 64,
-        "max_epochs": 100,
-        "init_epsilon": 1.0,
-        "min_epsilon": 0.01,
-        "initial_cash": 500000.0,
-        "max_positions": 3,
-        "transaction_fee": 0.000
-    },
-    "prod": {
-        "gamma": 0.99,
-        "learning_rate": 1e-4,
-        "buffer_size": 1000000,
-        "batch_size": 128,
-        "max_epochs": 800,
-        "init_epsilon": 1.0,
-        "min_epsilon": 0.01,
-        "initial_cash": 1000000.0,
-        "max_positions": 3,
-        "transaction_fee": 0.000
+        "transaction_fee": 0.000,
+        "max_positions": 1,
+        "profit_reward_weight": 1.0,
+        "penalty_reward_weight": 1.0
     }
 }

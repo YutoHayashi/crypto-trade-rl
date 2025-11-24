@@ -90,11 +90,12 @@ class CryptoExchangeEnv(gym.Env):
     def __init__(self,
                  data: pd.DataFrame,
                  max_steps: int,
-                 initial_cash: float = 1_000_000,
-                 transaction_fee: float = 0.01/100,
-                 max_positions: int = 5,
-                 profit_reward_weight: float = 1.0,
-                 feature_columns: list = []):
+                 initial_cash: float,
+                 transaction_fee: float,
+                 max_positions: int,
+                 profit_reward_weight,
+                 penalty_reward_weight,
+                 feature_columns: list):
         """
         Args:
             data (_type_): _description_
@@ -109,6 +110,7 @@ class CryptoExchangeEnv(gym.Env):
         self.transaction_fee = transaction_fee
         self.max_positions = max_positions
         self.profit_reward_weight = profit_reward_weight
+        self.penalty_reward_weight = penalty_reward_weight
         self.feature_columns = feature_columns
         
         self.current_step = 0
@@ -164,13 +166,16 @@ class CryptoExchangeEnv(gym.Env):
         hold_reward = 0.0
         
         if action == Actions.DO_NOTHING.value:
-            hold_reward = self.portfolio.unrealized_pnl(best_bid=best_bid, best_ask=best_ask) * 0.01
+            unrealized_pnl = self.portfolio.unrealized_pnl(best_bid=best_bid, best_ask=best_ask)
+            hold_reward = unrealized_pnl * 0.01
+        
         elif action == Actions.BUY_AT_BEST_BID.value:
             if self.portfolio.short_positions:
                 position = self.portfolio.short_positions[0]
                 pnl = self.portfolio.close_position(position, price=best_bid)
             elif len(self.portfolio.positions) < self.max_positions:
                 self.portfolio.open_position(PositionType.LONG, quantity=0.01, price=best_bid)
+        
         elif action == Actions.SELL_AT_BEST_ASK.value:
             if self.portfolio.long_positions:
                 position = self.portfolio.long_positions[0]
@@ -178,11 +183,10 @@ class CryptoExchangeEnv(gym.Env):
             elif len(self.portfolio.positions) < self.max_positions:
                 self.portfolio.open_position(PositionType.SHORT, quantity=0.01, price=best_ask)
         
-        if pnl >= 500:
-            pnl *= self.profit_reward_weight
-            reward += pnl
+        if pnl >= 200:
+            reward += pnl * self.profit_reward_weight
         elif pnl <= 0:
-            reward += pnl
+            reward += pnl * self.penalty_reward_weight
         
         reward += hold_reward
         
