@@ -15,6 +15,7 @@ import torch
 from lob_transformer.module import LOBDataset, LOBDatasetConfig, LOBTransformer
 
 from .dqn import DQNTrainer
+from .apex import ApeXTrainer
 
 
 def parse_args() -> dict:
@@ -23,6 +24,7 @@ def parse_args() -> dict:
     parser.add_argument('--preset', type=str, required=False, default='debug', help='Preset configuration to use.')
     parser.add_argument('--mode', type=str, choices=['train', 'eval'], required=False, default='train', help='Mode: train or evaluate.')
     
+    parser.add_argument('--method', type=str, choices=['dqn', 'ddqn', 'apex'], required=False, default=None, help='RL method to use.')
     parser.add_argument('--csv_path', type=str, required=False, default=None, help='Path to the CSV file containing market data.')
     parser.add_argument('--gamma', type=float, required=False, default=None, help='Discount factor for future rewards.')
     parser.add_argument('--lr', type=float, required=False, default=None, help='Learning rate for the optimizer.')
@@ -31,11 +33,14 @@ def parse_args() -> dict:
     parser.add_argument('--max_epochs', type=int, required=False, default=None, help='Maximum number of training epochs.')
     parser.add_argument('--init_epsilon', type=float, required=False, default=None, help='Initial epsilon for epsilon-greedy policy.')
     parser.add_argument('--min_epsilon', type=float, required=False, default=None, help='Minimum epsilon for epsilon-greedy policy.')
+    parser.add_argument('--target_update_interval', type=int, required=False, default=None, help='Interval for hard update of target network.')
     parser.add_argument('--initial_cash', type=float, required=False, default=None, help='Initial cash for the trading environment.')
     parser.add_argument('--transaction_fee', type=float, required=False, default=None, help='Transaction fee percentage.')
     parser.add_argument('--max_positions', type=int, required=False, default=None, help='Maximum number of open positions allowed.')
     parser.add_argument('--profit_reward_weight', type=float, required=False, default=None, help='Weight for profit in the reward calculation.')
     parser.add_argument('--penalty_reward_weight', type=float, required=False, default=None, help='Weight for penalty in the reward calculation.')
+    parser.add_argument('--num_actors', type=int, required=False, default=None, help='Number of actors for ApeX training.')
+    parser.add_argument('--n_step', type=int, required=False, default=None, help='Number of steps for N-step returns.')
     
     parser.add_argument('--ckpt_path', type=str, required=False, default=None, help='Path to a checkpoint file to resume training or for evaluation.')
     
@@ -112,14 +117,18 @@ def main() -> None:
     args = parse_args()
     mode = args.get('mode')
     csv_path = args.get('csv_path')
+    method = args.get('method')
     
     df = pd.read_csv(csv_path, index_col=0)
     df = prepare_data(df)
     
-    trainer = DQNTrainer(df=df, model_path=model_path, **args)
+    if method == 'apex':
+        trainer = ApeXTrainer(df=df, model_path=model_path, **args)
+    elif method == 'dqn':
+        trainer = DQNTrainer(df=df, model_path=model_path, **args)
     
     if mode in ['train']:
-        dqn, checkpoint_callback = trainer.train()
+        model, checkpoint_callback = trainer.train()
         
         best_model_path = checkpoint_callback.best_model_path
         trainer.evaluate(best_model_path)
