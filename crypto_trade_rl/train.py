@@ -14,7 +14,7 @@ import pandas as pd
 import torch
 from lob_transformer.module import LOBDataset, LOBDatasetConfig, LOBTransformer
 
-from .dqn import DQNTrainer, load_dqn_model
+from .dqn import DQNTrainer
 
 
 def parse_args() -> dict:

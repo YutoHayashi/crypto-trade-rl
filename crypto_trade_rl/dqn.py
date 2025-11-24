@@ -214,22 +214,6 @@ class DeepQNetwork(LightningModule):
         self.env = env
 
 
-def load_dqn_model(model_path: str) -> DeepQNetwork:
-    print("Loading the best model from checkpoint...")
-    checkpoint_dir = model_path
-    checkpoint_files = [f for f in os.listdir(checkpoint_dir) if f.startswith('dqn-') and f.endswith('.ckpt')]
-    if not checkpoint_files:
-        raise FileNotFoundError("No checkpoint files found in the specified output path.")
-    
-    latest_checkpoint = max(checkpoint_files, key=lambda f: os.path.getctime(os.path.join(checkpoint_dir, f)))
-    checkpoint_path = os.path.join(checkpoint_dir, latest_checkpoint)
-    
-    model = DeepQNetwork.load_from_checkpoint(checkpoint_path, map_location='cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"Loaded model from {checkpoint_path}")
-    
-    return model
-
-
 class DQNTrainer:
     def __init__(self,
                  df: pd.DataFrame,
