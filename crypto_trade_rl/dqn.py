@@ -1,4 +1,3 @@
-import os
 import random
 import warnings
 warnings.filterwarnings('ignore')
@@ -229,6 +228,7 @@ class DQNTrainer:
                  max_positions: int,
                  profit_reward_weight: float,
                  penalty_reward_weight: float,
+                 trading_volume: float,
                  model_path: str,
                  ckpt_path: str = None,
                  **kwargs):
@@ -246,6 +246,7 @@ class DQNTrainer:
         self.max_positions = max_positions
         self.profit_reward_weight = profit_reward_weight
         self.penalty_reward_weight = penalty_reward_weight
+        self.trading_volume = trading_volume
         self.model_path = model_path
         self.ckpt_path = ckpt_path
     
@@ -260,6 +261,7 @@ class DQNTrainer:
             max_positions=self.max_positions,
             profit_reward_weight=self.profit_reward_weight,
             penalty_reward_weight=self.penalty_reward_weight,
+            trading_volume=self.trading_volume,
             feature_columns=self.df.columns.difference(['best_ask', 'best_bid']).tolist()
         )
         
@@ -317,6 +319,7 @@ class DQNTrainer:
             max_positions=self.max_positions,
             profit_reward_weight=self.profit_reward_weight,
             penalty_reward_weight=self.penalty_reward_weight,
+            trading_volume=self.trading_volume,
             feature_columns=self.df.columns.difference(['best_ask', 'best_bid']).tolist()
         )
         

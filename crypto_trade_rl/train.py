@@ -39,6 +39,7 @@ def parse_args() -> dict:
     parser.add_argument('--max_positions', type=int, required=False, default=None, help='Maximum number of open positions allowed.')
     parser.add_argument('--profit_reward_weight', type=float, required=False, default=None, help='Weight for profit in the reward calculation.')
     parser.add_argument('--penalty_reward_weight', type=float, required=False, default=None, help='Weight for penalty in the reward calculation.')
+    parser.add_argument('--trading_volume', type=float, required=False, default=None, help='Trading volume for each position.')
     parser.add_argument('--num_actors', type=int, required=False, default=None, help='Number of actors for ApeX training.')
     parser.add_argument('--n_step', type=int, required=False, default=None, help='Number of steps for N-step returns.')
     

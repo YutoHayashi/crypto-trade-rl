@@ -59,7 +59,7 @@ class DuelingNetwork(nn.Module):
         return val + adv - adv.mean(dim=1, keepdim=True)
 
 
-class Actor:
+class ApeXActor:
     def __init__(self,
                  env: CryptoExchangeEnv,
                  epsilon: float,
@@ -173,7 +173,7 @@ class ApeX(LightningModule):
         )
         
         self.episodes = 0
-        self.actors: list[Actor] = []
+        self.actors: list[ApeXActor] = []
     
     def configure_optimizers(self):
         return torch.optim.Adam(self.q_net.parameters(), lr=self.lr)
@@ -300,7 +300,7 @@ class ApeX(LightningModule):
         self.actors = []
         for i, env in enumerate(envs):
             epsilon = actor_epsilons[i]
-            self.actors.append(Actor(env, epsilon, self.n_step, self.gamma))
+            self.actors.append(ApeXActor(env, epsilon, self.n_step, self.gamma))
 
 
 class ApeXTrainer:
@@ -319,6 +319,7 @@ class ApeXTrainer:
                  max_positions: int,
                  profit_reward_weight: float,
                  penalty_reward_weight: float,
+                 trading_volume: float,
                  n_step: int,
                  num_actors: int,
                  model_path: str,
@@ -338,6 +339,7 @@ class ApeXTrainer:
         self.max_positions = max_positions
         self.profit_reward_weight = profit_reward_weight
         self.penalty_reward_weight = penalty_reward_weight
+        self.trading_volume = trading_volume
         self.n_step = n_step
         self.num_actors = num_actors
         self.model_path = model_path
@@ -357,6 +359,7 @@ class ApeXTrainer:
                 max_positions=self.max_positions,
                 profit_reward_weight=self.profit_reward_weight,
                 penalty_reward_weight=self.penalty_reward_weight,
+                trading_volume=self.trading_volume,
                 feature_columns=self.df.columns.difference(['best_ask', 'best_bid']).tolist()
             )
             envs.append(env)
@@ -419,6 +422,7 @@ class ApeXTrainer:
             max_positions=self.max_positions,
             profit_reward_weight=self.profit_reward_weight,
             penalty_reward_weight=self.penalty_reward_weight,
+            trading_volume=self.trading_volume,
             feature_columns=self.df.columns.difference(['best_ask', 'best_bid']).tolist()
         )
         

@@ -26,6 +26,10 @@ class Position:
     quantity: float
     price: float
     
+    @property
+    def pnl_target(self):
+        return self.price * self.quantity * 1e-3
+    
     def __repr__(self):
         return f"Position(type={self.position_type}, quantity={self.quantity}, price={self.price})"
 
@@ -34,7 +38,7 @@ class Portfolio:
         self.initial_cash = initial_cash
         self.transaction_fee = transaction_fee
         self.cash = self.initial_cash
-        self.positions = []
+        self.positions: list[Position] = []
     
     def reset(self) -> None:
         self.cash = self.initial_cash
@@ -95,13 +99,19 @@ class CryptoExchangeEnv(gym.Env):
                  max_positions: int,
                  profit_reward_weight,
                  penalty_reward_weight,
+                 trading_volume: float,
                  feature_columns: list):
         """
         Args:
-            data (_type_): _description_
-            initial_cash (float, optional): _description_. Defaults to 1_000_000.
-            transaction_fee (float, optional): _description_. Defaults to 0.01/100.
-            feature_columns (list, optional): _description_. Defaults to [].
+            data (pd.DataFrame): DataFrame containing market data with at least 'best_bid' and 'best_ask' columns.
+            max_steps (int): Maximum number of steps per episode.
+            initial_cash (float): Initial cash amount for the portfolio.
+            transaction_fee (float): Transaction fee percentage (e.g., 0.01 for 0.01%).
+            max_positions (int): Maximum number of open positions allowed.
+            profit_reward_weight (float): Weight for profit in the reward calculation.
+            penalty_reward_weight (float): Weight for penalty in the reward calculation.
+            trading_volume (float): Fixed trading volume for each trade action.
+            feature_columns (list): List of feature column names to include in the observation.
         """
         super().__init__()
         self.data = data
@@ -111,6 +121,7 @@ class CryptoExchangeEnv(gym.Env):
         self.max_positions = max_positions
         self.profit_reward_weight = profit_reward_weight
         self.penalty_reward_weight = penalty_reward_weight
+        self.trading_volume = trading_volume
         self.feature_columns = feature_columns
         
         self.current_step = 0
@@ -140,8 +151,12 @@ class CryptoExchangeEnv(gym.Env):
             best_ask = current_data['best_ask']
             
             features = current_data[self.feature_columns].values.astype(np.float32)
-            positions = sum([pos.quantity * (1 if pos.position_type == PositionType.LONG else -1) for pos in self.portfolio.positions])
-            unrealized_pnl = self.portfolio.unrealized_pnl(best_bid=best_bid, best_ask=best_ask) / 1_000
+            positions = sum([pos.quantity * (1 if pos.position_type == PositionType.LONG else -1) for pos in self.portfolio.positions]) / self.max_positions * self.trading_volume
+            
+            if self.portfolio.positions:
+                unrealized_pnl = self.portfolio.unrealized_pnl(best_bid=best_bid, best_ask=best_ask) / sum([p.pnl_target for p in self.portfolio.positions])
+            else:
+                unrealized_pnl = 0.0
             
             return np.concatenate([
                 features,
@@ -158,37 +173,46 @@ class CryptoExchangeEnv(gym.Env):
     
     def _step_action(self, action: int) -> float:
         current_data = self.data.iloc[self.current_step]
-        reward = 0.0
         
         best_bid = current_data['best_bid']
         best_ask = current_data['best_ask']
         pnl = 0.0
+        pnl_target = 0.0
+        pnl_reward = 0.0
         hold_reward = 0.0
+        invalid_action_penalty = 0.0
+        reward = 0.0
         
         if action == Actions.DO_NOTHING.value:
             unrealized_pnl = self.portfolio.unrealized_pnl(best_bid=best_bid, best_ask=best_ask)
-            hold_reward = unrealized_pnl * 0.01
+            hold_reward = unrealized_pnl * 1e-3
         
         elif action == Actions.BUY_AT_BEST_BID.value:
             if self.portfolio.short_positions:
                 position = self.portfolio.short_positions[0]
+                pnl_target = position.pnl_target
                 pnl = self.portfolio.close_position(position, price=best_bid)
             elif len(self.portfolio.positions) < self.max_positions:
-                self.portfolio.open_position(PositionType.LONG, quantity=0.01, price=best_bid)
+                self.portfolio.open_position(PositionType.LONG, quantity=self.trading_volume, price=best_bid)
+            else:
+                invalid_action_penalty = 0.1
         
         elif action == Actions.SELL_AT_BEST_ASK.value:
             if self.portfolio.long_positions:
                 position = self.portfolio.long_positions[0]
+                pnl_target = position.pnl_target
                 pnl = self.portfolio.close_position(position, price=best_ask)
             elif len(self.portfolio.positions) < self.max_positions:
-                self.portfolio.open_position(PositionType.SHORT, quantity=0.01, price=best_ask)
+                self.portfolio.open_position(PositionType.SHORT, quantity=self.trading_volume, price=best_ask)
+            else:
+                invalid_action_penalty = 0.1
         
-        if pnl >= 200:
-            reward += pnl * self.profit_reward_weight
-        elif pnl <= 0:
-            reward += pnl * self.penalty_reward_weight
+        if pnl >= pnl_target:
+            pnl_reward += pnl * self.profit_reward_weight
+        elif pnl < 0:
+            pnl_reward += pnl * self.penalty_reward_weight
         
-        reward += hold_reward
+        reward += pnl_reward + hold_reward - invalid_action_penalty
         
         if self.current_step >= self.max_steps or self.portfolio.cash <= 0:
             self.done = True
