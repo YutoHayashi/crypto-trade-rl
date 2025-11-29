@@ -1,6 +1,5 @@
 from enum import Enum
 from dataclasses import dataclass
-import random
 import uuid
 from collections import deque
 
@@ -126,6 +125,7 @@ class CryptoExchangeEnv(gym.Env):
         
         self.current_step = 0
         self.portfolio = Portfolio(initial_cash=self.initial_cash, transaction_fee=self.transaction_fee)
+        self.prev_total_value = self.initial_cash
         self.history = deque(maxlen=self.max_steps)
         self.done = False
         
@@ -178,14 +178,10 @@ class CryptoExchangeEnv(gym.Env):
         best_ask = current_data['best_ask']
         pnl = 0.0
         pnl_target = 0.0
-        pnl_reward = 0.0
-        hold_reward = 0.0
         invalid_action_penalty = 0.0
-        reward = 0.0
         
         if action == Actions.DO_NOTHING.value:
-            unrealized_pnl = self.portfolio.unrealized_pnl(best_bid=best_bid, best_ask=best_ask)
-            hold_reward = unrealized_pnl * 1e-3
+            pass
         
         elif action == Actions.BUY_AT_BEST_BID.value:
             if self.portfolio.short_positions:
@@ -195,7 +191,7 @@ class CryptoExchangeEnv(gym.Env):
             elif len(self.portfolio.positions) < self.max_positions:
                 self.portfolio.open_position(PositionType.LONG, quantity=self.trading_volume, price=best_bid)
             else:
-                invalid_action_penalty = 0.1
+                invalid_action_penalty = 100
         
         elif action == Actions.SELL_AT_BEST_ASK.value:
             if self.portfolio.long_positions:
@@ -205,14 +201,21 @@ class CryptoExchangeEnv(gym.Env):
             elif len(self.portfolio.positions) < self.max_positions:
                 self.portfolio.open_position(PositionType.SHORT, quantity=self.trading_volume, price=best_ask)
             else:
-                invalid_action_penalty = 0.1
+                invalid_action_penalty = 100
         
-        if pnl >= pnl_target:
-            pnl_reward += pnl * self.profit_reward_weight
-        elif pnl < 0:
-            pnl_reward += pnl * self.penalty_reward_weight
+        current_total_value = self.portfolio.total_value(best_bid=best_bid, best_ask=best_ask)
+        diff_value = current_total_value - self.prev_total_value
+        self.prev_total_value = current_total_value
         
-        reward += pnl_reward + hold_reward - invalid_action_penalty
+        if diff_value > 0:
+            reward = diff_value * self.profit_reward_weight
+        else:
+            reward = diff_value * self.penalty_reward_weight
+        
+        if pnl > 0 and pnl >= pnl_target:
+            reward += pnl * 1.5
+        
+        reward -= invalid_action_penalty
         
         if self.current_step >= self.max_steps or self.portfolio.cash <= 0:
             self.done = True
@@ -225,7 +228,7 @@ class CryptoExchangeEnv(gym.Env):
             "best_ask": best_ask,
             "cash": self.portfolio.cash,
             "positions": self.portfolio.positions.copy(),
-            "total_value": self.portfolio.total_value(best_bid=best_bid, best_ask=best_ask),
+            "total_value": current_total_value,
             "unrealized_pnl": self.portfolio.unrealized_pnl(best_bid=best_bid, best_ask=best_ask),
             "pnl": pnl,
             "reward": reward,
@@ -239,6 +242,7 @@ class CryptoExchangeEnv(gym.Env):
     def reset(self) -> tuple[np.ndarray, dict]:
         self.current_step = 0
         self.portfolio.reset()
+        self.prev_total_value = self.initial_cash
         self.history.clear()
         self.done = False
         
