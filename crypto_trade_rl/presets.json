@@ -52,5 +52,20 @@
         "trading_volume": 0.01,
         "num_actors": 4,
         "n_step": 5
+    },
+    "debug_ac": {
+        "method": "ac",
+        "csv_path": "csv/debug_data.csv",
+        "gamma": 0.99,
+        "lr": 1e-4,
+        "max_epochs": 10,
+        "initial_cash": 1000000.0,
+        "transaction_fee": 0.000,
+        "max_positions": 1,
+        "profit_reward_weight": 1.0,
+        "penalty_reward_weight": 1.0,
+        "trading_volume": 0.01,
+        "num_actors": 4,
+        "n_step": 3
     }
 }

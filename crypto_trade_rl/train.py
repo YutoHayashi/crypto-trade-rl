@@ -17,6 +17,7 @@ from lob_transformer.module import LOBDataset, LOBDatasetConfig, LOBTransformer
 from .dqn import DQNTrainer
 from .ddqn import DDQNTrainer
 from .apex import ApeXTrainer
+from .ac import ActorCriticTrainer
 
 
 def parse_args() -> dict:
@@ -25,7 +26,7 @@ def parse_args() -> dict:
     parser.add_argument('--preset', type=str, required=False, default='debug', help='Preset configuration to use.')
     parser.add_argument('--mode', type=str, choices=['train', 'eval'], required=False, default='train', help='Mode: train or evaluate.')
     
-    parser.add_argument('--method', type=str, choices=['dqn', 'ddqn', 'apex'], required=False, default=None, help='RL method to use.')
+    parser.add_argument('--method', type=str, choices=['dqn', 'ddqn', 'apex', 'ac'], required=False, default=None, help='RL method to use.')
     parser.add_argument('--csv_path', type=str, required=False, default=None, help='Path to the CSV file containing market data.')
     parser.add_argument('--gamma', type=float, required=False, default=None, help='Discount factor for future rewards.')
     parser.add_argument('--lr', type=float, required=False, default=None, help='Learning rate for the optimizer.')
@@ -126,10 +127,14 @@ def main() -> None:
     
     if method == 'apex':
         trainer = ApeXTrainer(df=df, model_path=model_path, **args)
+    elif method == 'ac':
+        trainer = ActorCriticTrainer(df=df, model_path=model_path, **args)
     elif method == 'ddqn':
         trainer = DDQNTrainer(df=df, model_path=model_path, **args)
     elif method == 'dqn':
         trainer = DQNTrainer(df=df, model_path=model_path, **args)
+    else:
+        raise ValueError(f"Unsupported method: {method}")
     
     if mode in ['train']:
         model, checkpoint_callback = trainer.train()
