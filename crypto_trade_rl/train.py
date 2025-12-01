@@ -23,7 +23,7 @@ from .ac import ActorCriticTrainer
 def parse_args() -> dict:
     parser = argparse.ArgumentParser(description="Train or evaluate a DQN model for crypto trading.")
     
-    parser.add_argument('--preset', type=str, required=False, default='debug', help='Preset configuration to use.')
+    parser.add_argument('--preset', type=str, required=True, help='Preset configuration to use.')
     parser.add_argument('--mode', type=str, choices=['train', 'eval'], required=False, default='train', help='Mode: train or evaluate.')
     
     parser.add_argument('--method', type=str, choices=['dqn', 'ddqn', 'apex', 'ac'], required=False, default=None, help='RL method to use.')
@@ -49,16 +49,7 @@ def parse_args() -> dict:
     
     args = parser.parse_args()
     
-    with open(os.path.join(os.path.dirname(__file__), 'presets.json'), 'r') as f:
-        preset = json.load(f).get(args.preset, {})
-    
-    args = {**preset, **{k: v for k, v in vars(args).items() if v is not None}}
-    
-    print("Using configuration:")
-    for key, value in args.items():
-        print(f"  {key}: {value}")
-    
-    return args
+    return {k: v for k, v in vars(args).items() if v is not None}
 
 
 def load_all_lobtransformer_models():
@@ -118,32 +109,49 @@ def prepare_data(df: pd.DataFrame):
 
 def main() -> None:
     args = parse_args()
-    mode = args.get('mode')
-    csv_path = args.get('csv_path')
-    method = args.get('method')
+    preset = args.get('preset')
     
-    df = pd.read_csv(csv_path, index_col=0)
-    df = prepare_data(df)
+    with open(os.path.join(os.path.dirname(__file__), 'presets.json'), 'r') as f:
+        hparams: list = json.load(f).get(preset, [])
     
-    if method == 'apex':
-        trainer = ApeXTrainer(df=df, model_path=model_path, **args)
-    elif method == 'ac':
-        trainer = ActorCriticTrainer(df=df, model_path=model_path, **args)
-    elif method == 'ddqn':
-        trainer = DDQNTrainer(df=df, model_path=model_path, **args)
-    elif method == 'dqn':
-        trainer = DQNTrainer(df=df, model_path=model_path, **args)
-    else:
-        raise ValueError(f"Unsupported method: {method}")
+    ckpt_path = None
     
-    if mode in ['train']:
-        model, checkpoint_callback = trainer.train()
+    for _, hp in enumerate(hparams):
+        phase = _ + 1
+        print(f"Running with args (phase {phase}):")
         
-        best_model_path = checkpoint_callback.best_model_path
-        trainer.evaluate(best_model_path)
-    
-    elif mode in ['eval']:
-        trainer.evaluate(args.get('ckpt_path'))
+        _args = {**hp, **args}
+        
+        for k, v in _args.items():
+            print(f"  {k}: {v}")
+        
+        mode = _args.get('mode')
+        csv_path = _args.get('csv_path')
+        ckpt_path = _args.get('ckpt_path', ckpt_path)
+        method = _args.get('method')
+        
+        df = pd.read_csv(csv_path, index_col=0)
+        df = prepare_data(df)
+        
+        if method == 'apex':
+            trainer = ApeXTrainer(df=df, model_path=model_path, **_args)
+        elif method == 'ac':
+            trainer = ActorCriticTrainer(df=df, model_path=model_path, **_args)
+        elif method == 'ddqn':
+            trainer = DDQNTrainer(df=df, model_path=model_path, **_args)
+        elif method == 'dqn':
+            trainer = DQNTrainer(df=df, model_path=model_path, **_args)
+        else:
+            raise ValueError(f"Unsupported method: {method}")
+        
+        if mode in ['train']:
+            model, checkpoint_callback = trainer.train()
+            
+            ckpt_path = checkpoint_callback.best_model_path
+            trainer.evaluate(ckpt_path)
+        
+        elif mode in ['eval']:
+            trainer.evaluate(ckpt_path)
 
 
 if __name__ == "__main__":
