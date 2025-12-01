@@ -16,6 +16,23 @@
         "penalty_reward_weight": 1.0,
         "trading_volume": 0.01
     },
+    "debug_ddqn": {
+        "method": "ddqn",
+        "csv_path": "csv/debug_data.csv",
+        "gamma": 0.99,
+        "lr": 1e-3,
+        "buffer_size": 100000,
+        "batch_size": 32,
+        "max_epochs": 10,
+        "init_epsilon": 1.0,
+        "min_epsilon": 0.01,
+        "initial_cash": 100000.0,
+        "transaction_fee": 0.000,
+        "max_positions": 1,
+        "profit_reward_weight": 1.0,
+        "penalty_reward_weight": 1.0,
+        "trading_volume": 0.01
+    },
     "debug_apex": {
         "method": "apex",
         "csv_path": "csv/debug_data.csv",

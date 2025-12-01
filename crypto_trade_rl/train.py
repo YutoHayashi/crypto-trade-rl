@@ -15,6 +15,7 @@ import torch
 from lob_transformer.module import LOBDataset, LOBDatasetConfig, LOBTransformer
 
 from .dqn import DQNTrainer
+from .ddqn import DDQNTrainer
 from .apex import ApeXTrainer
 
 
@@ -125,6 +126,8 @@ def main() -> None:
     
     if method == 'apex':
         trainer = ApeXTrainer(df=df, model_path=model_path, **args)
+    elif method == 'ddqn':
+        trainer = DDQNTrainer(df=df, model_path=model_path, **args)
     elif method == 'dqn':
         trainer = DQNTrainer(df=df, model_path=model_path, **args)
     
