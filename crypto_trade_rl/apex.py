@@ -317,6 +317,8 @@ class ApeXTrainer:
                  initial_cash: float,
                  transaction_fee: float,
                  max_positions: int,
+                 target_profit: float,
+                 holding_reward_weight: float,
                  profit_reward_weight: float,
                  penalty_reward_weight: float,
                  trading_volume: float,
@@ -337,6 +339,8 @@ class ApeXTrainer:
         self.initial_cash = initial_cash
         self.transaction_fee = transaction_fee
         self.max_positions = max_positions
+        self.target_profit = target_profit
+        self.holding_reward_weight = holding_reward_weight
         self.profit_reward_weight = profit_reward_weight
         self.penalty_reward_weight = penalty_reward_weight
         self.trading_volume = trading_volume
@@ -357,6 +361,8 @@ class ApeXTrainer:
                 initial_cash=self.initial_cash,
                 transaction_fee=self.transaction_fee,
                 max_positions=self.max_positions,
+                target_profit=self.target_profit,
+                holding_reward_weight=self.holding_reward_weight,
                 profit_reward_weight=self.profit_reward_weight,
                 penalty_reward_weight=self.penalty_reward_weight,
                 trading_volume=self.trading_volume,
@@ -420,6 +426,8 @@ class ApeXTrainer:
             initial_cash=self.initial_cash,
             transaction_fee=self.transaction_fee,
             max_positions=self.max_positions,
+            target_profit=self.target_profit,
+            holding_reward_weight=self.holding_reward_weight,
             profit_reward_weight=self.profit_reward_weight,
             penalty_reward_weight=self.penalty_reward_weight,
             trading_volume=self.trading_volume,

@@ -24,18 +24,19 @@ class Position:
     position_type: PositionType
     volume: float
     price: float
+    transaction_fee: float
+    target_profit: float
     
     @property
     def pnl_target(self):
-        return self.price * self.volume * 1e-3
+        return self.price * self.volume * self.target_profit
     
     def __repr__(self):
-        return f"Position(type={self.position_type}, volume={self.volume}, price={self.price})"
+        return f"Position(id={self.id}, type={self.position_type}, volume={self.volume}, price={self.price}, pnl_target={self.pnl_target}, transaction_fee={self.transaction_fee})"
 
 class Portfolio:
-    def __init__(self, initial_cash: float, transaction_fee: float = 0.01/100):
+    def __init__(self, initial_cash: float):
         self.initial_cash = initial_cash
-        self.transaction_fee = transaction_fee
         self.cash = self.initial_cash
         self.positions: list[Position] = []
     
@@ -43,16 +44,15 @@ class Portfolio:
         self.cash = self.initial_cash
         self.positions = []
     
-    def open_position(self, position_type: PositionType, volume: float, price: float) -> Position:
-        id = uuid.uuid4()
-        position = Position(id=id, position_type=position_type, volume=volume, price=price)
+    def open_position(self, **kwargs) -> Position:
+        position = Position(id=uuid.uuid4(), **kwargs)
         self.positions.append(position)
         return position
     
     def close_position(self, position: Position, price: float) -> float:
         if position in self.positions:
             self.positions.remove(position)
-            total_transaction_cost = (price + position.price) * position.volume * self.transaction_fee
+            total_transaction_cost = (price + position.price) * position.volume * position.transaction_fee
             if position.position_type == PositionType.LONG:
                 pnl = (price - position.price) * position.volume - total_transaction_cost
             elif position.position_type == PositionType.SHORT:
@@ -66,10 +66,10 @@ class Portfolio:
         pnl = 0.0
         for pos in self.positions:
             if pos.position_type == PositionType.LONG:
-                unrealized_cost = (best_bid + pos.price) * pos.volume * self.transaction_fee
+                unrealized_cost = (best_bid + pos.price) * pos.volume * pos.transaction_fee
                 pnl += (best_bid - pos.price) * pos.volume - unrealized_cost
             elif pos.position_type == PositionType.SHORT:
-                unrealized_cost = (best_ask + pos.price) * pos.volume * self.transaction_fee
+                unrealized_cost = (best_ask + pos.price) * pos.volume * pos.transaction_fee
                 pnl += (pos.price - best_ask) * pos.volume - unrealized_cost
         return pnl
     
@@ -96,8 +96,10 @@ class CryptoExchangeEnv(gym.Env):
                  initial_cash: float,
                  transaction_fee: float,
                  max_positions: int,
-                 profit_reward_weight,
-                 penalty_reward_weight,
+                 target_profit: float,
+                 holding_reward_weight: float,
+                 profit_reward_weight: float,
+                 penalty_reward_weight: float,
                  trading_volume: float,
                  feature_columns: list):
         """
@@ -107,6 +109,8 @@ class CryptoExchangeEnv(gym.Env):
             initial_cash (float): Initial cash amount for the portfolio.
             transaction_fee (float): Transaction fee percentage (e.g., 0.01 for 0.01%).
             max_positions (int): Maximum number of open positions allowed.
+            target_profit (float): Target profit percentage for each position.
+            holding_reward_weight (float): Weight for holding reward in the reward calculation.
             profit_reward_weight (float): Weight for profit in the reward calculation.
             penalty_reward_weight (float): Weight for penalty in the reward calculation.
             trading_volume (float): Fixed trading volume for each trade action.
@@ -118,13 +122,15 @@ class CryptoExchangeEnv(gym.Env):
         self.initial_cash = initial_cash
         self.transaction_fee = transaction_fee
         self.max_positions = max_positions
+        self.target_profit = target_profit
+        self.holding_reward_weight = holding_reward_weight
         self.profit_reward_weight = profit_reward_weight
         self.penalty_reward_weight = penalty_reward_weight
         self.trading_volume = trading_volume
         self.feature_columns = feature_columns
         
         self.current_step = 0
-        self.portfolio = Portfolio(initial_cash=self.initial_cash, transaction_fee=self.transaction_fee)
+        self.portfolio = Portfolio(initial_cash=self.initial_cash)
         self.prev_total_value = self.initial_cash
         self.history = deque(maxlen=self.max_steps)
         self.done = False
@@ -176,16 +182,17 @@ class CryptoExchangeEnv(gym.Env):
         
         best_bid = current_data['best_bid']
         best_ask = current_data['best_ask']
+        
         pnl = 0.0
         pnl_target = 0.0
+        reward = 0.0
         invalid_action_penalty = 0.0
         holding_reward = 0.0
-        entry_cost_offset = 0.0
         
         if action == Actions.DO_NOTHING.value:
             unrealized_pnl = self.portfolio.unrealized_pnl(best_bid=best_bid, best_ask=best_ask)
             if unrealized_pnl > 0:
-                holding_reward = unrealized_pnl * 0.03
+                holding_reward = unrealized_pnl * self.holding_reward_weight
         
         elif action == Actions.BUY_AT_BEST_BID.value:
             if self.portfolio.short_positions:
@@ -193,10 +200,15 @@ class CryptoExchangeEnv(gym.Env):
                 pnl_target = position.pnl_target
                 pnl = self.portfolio.close_position(position, price=best_bid)
             elif len(self.portfolio.positions) < self.max_positions:
-                self.portfolio.open_position(PositionType.LONG, volume=self.trading_volume, price=best_bid)
-                entry_cost_offset = (best_bid + best_ask) * self.trading_volume * self.transaction_fee
+                self.portfolio.open_position(
+                    position_type=PositionType.LONG,
+                    volume=self.trading_volume,
+                    price=best_bid,
+                    target_profit=self.target_profit,
+                    transaction_fee=self.transaction_fee
+                )
             else:
-                invalid_action_penalty = 10
+                invalid_action_penalty = 1e2
         
         elif action == Actions.SELL_AT_BEST_ASK.value:
             if self.portfolio.long_positions:
@@ -204,22 +216,32 @@ class CryptoExchangeEnv(gym.Env):
                 pnl_target = position.pnl_target
                 pnl = self.portfolio.close_position(position, price=best_ask)
             elif len(self.portfolio.positions) < self.max_positions:
-                self.portfolio.open_position(PositionType.SHORT, volume=self.trading_volume, price=best_ask)
-                entry_cost_offset = (best_bid + best_ask) * self.trading_volume * self.transaction_fee
+                self.portfolio.open_position(
+                    position_type=PositionType.SHORT,
+                    volume=self.trading_volume,
+                    price=best_ask,
+                    target_profit=self.target_profit,
+                    transaction_fee=self.transaction_fee
+                )
             else:
-                invalid_action_penalty = 10
+                invalid_action_penalty = 1e2
         
+        prev_total_value = self.prev_total_value
         current_total_value = self.portfolio.total_value(best_bid=best_bid, best_ask=best_ask)
-        diff_value = current_total_value - self.prev_total_value
         self.prev_total_value = current_total_value
         
-        reward = diff_value + entry_cost_offset
+        diff_value = current_total_value - prev_total_value
+        
+        reward += diff_value
+        reward -= invalid_action_penalty
+        reward += holding_reward
         
         if pnl > 0 and pnl >= pnl_target:
             reward += pnl * self.profit_reward_weight
+        elif pnl <= 0:
+            reward += pnl * self.penalty_reward_weight
         
-        reward -= invalid_action_penalty
-        reward += holding_reward
+        reward = round(reward, 8)
         
         if self.current_step >= self.max_steps or self.portfolio.cash <= 0:
             self.done = True

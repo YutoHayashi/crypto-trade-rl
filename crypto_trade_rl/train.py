@@ -39,6 +39,8 @@ def parse_args() -> dict:
     parser.add_argument('--initial_cash', type=float, required=False, default=None, help='Initial cash for the trading environment.')
     parser.add_argument('--transaction_fee', type=float, required=False, default=None, help='Transaction fee percentage.')
     parser.add_argument('--max_positions', type=int, required=False, default=None, help='Maximum number of open positions allowed.')
+    parser.add_argument('--target_profit', type=float, required=False, default=None, help='Target profit percentage for each position.')
+    parser.add_argument('--holding_reward_weight', type=float, required=False, default=None, help='Weight for holding reward in the reward calculation.')
     parser.add_argument('--profit_reward_weight', type=float, required=False, default=None, help='Weight for profit in the reward calculation.')
     parser.add_argument('--penalty_reward_weight', type=float, required=False, default=None, help='Weight for penalty in the reward calculation.')
     parser.add_argument('--trading_volume', type=float, required=False, default=None, help='Trading volume for each position.')
