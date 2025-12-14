@@ -17,7 +17,7 @@ from lightning.pytorch import Trainer
 from lightning.pytorch import LightningModule
 from lightning.pytorch.callbacks import ModelCheckpoint
 
-from .environment import Actions, PositionType, CryptoExchangeEnv
+from .environment import CryptoTradeEnv, Actions
 
 
 class DummyDataset(Dataset):
@@ -115,7 +115,7 @@ class DeepQNetwork(LightningModule):
     
     def choose_action(self, state):
         if random.random() < self.get_epsilon():
-            return random.randint(0, len(Actions) - 1)
+            return random.randint(0, self.action_size - 1)
         with torch.no_grad():
             q_values = self(state)
             return q_values.argmax().item()
@@ -146,7 +146,8 @@ class DeepQNetwork(LightningModule):
         target = rewards + (1 - dones) * self.gamma * next_q_values
         
         td_error = torch.abs(q_values - target).detach()
-        priorities = torch.clamp(td_error, min=1e-8, max=10.0)
+        priorities = torch.nan_to_num(td_error, nan=1e-8, posinf=10.0, neginf=1e-8)
+        priorities = torch.clamp(priorities, min=1e-8, max=10.0)
         
         loss = self.loss_fn(q_values, target)
         self.losses.append(loss)
@@ -198,18 +199,12 @@ class DeepQNetwork(LightningModule):
         
         self.log('total_steps', self.env.current_step)
         self.log('episode_reward', self.episode_reward)
-        self.log('count_action_buy', len([x for x in self.env.history if x['action'] == Actions.BUY_AT_BEST_BID.value]))
-        self.log('count_action_sell', len([x for x in self.env.history if x['action'] == Actions.SELL_AT_BEST_ASK.value]))
-        self.log('count_action_hold', len([x for x in self.env.history if x['action'] == Actions.DO_NOTHING.value]))
-        self.log('last_cash', self.env.history[-1]['cash'])
-        self.log('last_long_positions', len([p for p in self.env.portfolio.positions if p.position_type == PositionType.LONG]))
-        self.log('last_short_positions', len([p for p in self.env.portfolio.positions if p.position_type == PositionType.SHORT]))
-        self.log('last_unrealized_pnl', self.env.history[-1]['unrealized_pnl'])
+        self.log('portfolio_value', info.get('total_value', 0.))
     
     def test_step(self, batch, batch_idx):
         pass
     
-    def set_env(self, env: CryptoExchangeEnv):
+    def set_env(self, env: CryptoTradeEnv):
         self.env = env
 
 
@@ -223,14 +218,10 @@ class DQNTrainer:
                  max_epochs: int,
                  init_epsilon: float,
                  min_epsilon: float,
-                 initial_cash: float,
+                 initial_collateral: float,
                  transaction_fee: float,
-                 max_positions: int,
-                 target_profit: float,
-                 holding_reward_weight: float,
-                 profit_reward_weight: float,
-                 penalty_reward_weight: float,
                  trading_volume: float,
+                 profit_target: float,
                  model_path: str,
                  ckpt_path: str = None,
                  **kwargs):
@@ -243,31 +234,23 @@ class DQNTrainer:
         self.init_epsilon = init_epsilon
         self.min_epsilon = min_epsilon
         self.epsilon_decay_episodes = int(max_epochs * 0.8)
-        self.initial_cash = initial_cash
+        self.initial_collateral = initial_collateral
         self.transaction_fee = transaction_fee
-        self.max_positions = max_positions
-        self.target_profit = target_profit
-        self.holding_reward_weight = holding_reward_weight
-        self.profit_reward_weight = profit_reward_weight
-        self.penalty_reward_weight = penalty_reward_weight
         self.trading_volume = trading_volume
+        self.profit_target = profit_target
         self.model_path = model_path
         self.ckpt_path = ckpt_path
     
     def train(self):
         print("Training DQN model...")
         
-        env = CryptoExchangeEnv(
+        env = CryptoTradeEnv(
             data=self.df,
             max_steps=int(len(self.df)) - 1,
-            initial_cash=self.initial_cash,
+            initial_collateral=self.initial_collateral,
             transaction_fee=self.transaction_fee,
-            max_positions=self.max_positions,
-            target_profit=self.target_profit,
-            holding_reward_weight=self.holding_reward_weight,
-            profit_reward_weight=self.profit_reward_weight,
-            penalty_reward_weight=self.penalty_reward_weight,
             trading_volume=self.trading_volume,
+            profit_target=self.profit_target,
             feature_columns=self.df.columns.difference(['best_ask', 'best_bid']).tolist()
         )
         
@@ -317,17 +300,13 @@ class DQNTrainer:
     def evaluate(self, model_path: str):
         print("Evaluating DQN model...")
         
-        env = CryptoExchangeEnv(
+        env = CryptoTradeEnv(
             data=self.df,
             max_steps=int(len(self.df)) - 1,
-            initial_cash=self.initial_cash,
+            initial_collateral=self.initial_collateral,
             transaction_fee=self.transaction_fee,
-            max_positions=self.max_positions,
-            target_profit=self.target_profit,
-            holding_reward_weight=self.holding_reward_weight,
-            profit_reward_weight=self.profit_reward_weight,
-            penalty_reward_weight=self.penalty_reward_weight,
             trading_volume=self.trading_volume,
+            profit_target=self.profit_target,
             feature_columns=self.df.columns.difference(['best_ask', 'best_bid']).tolist()
         )
         

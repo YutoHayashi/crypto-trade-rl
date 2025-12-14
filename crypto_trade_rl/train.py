@@ -36,14 +36,10 @@ def parse_args() -> dict:
     parser.add_argument('--init_epsilon', type=float, required=False, default=None, help='Initial epsilon for epsilon-greedy policy.')
     parser.add_argument('--min_epsilon', type=float, required=False, default=None, help='Minimum epsilon for epsilon-greedy policy.')
     parser.add_argument('--target_update_interval', type=int, required=False, default=None, help='Interval for hard update of target network.')
-    parser.add_argument('--initial_cash', type=float, required=False, default=None, help='Initial cash for the trading environment.')
+    parser.add_argument('--initial_collateral', type=float, required=False, default=None, help='Initial collateral for the trading environment.')
     parser.add_argument('--transaction_fee', type=float, required=False, default=None, help='Transaction fee percentage.')
-    parser.add_argument('--max_positions', type=int, required=False, default=None, help='Maximum number of open positions allowed.')
-    parser.add_argument('--target_profit', type=float, required=False, default=None, help='Target profit percentage for each position.')
-    parser.add_argument('--holding_reward_weight', type=float, required=False, default=None, help='Weight for holding reward in the reward calculation.')
-    parser.add_argument('--profit_reward_weight', type=float, required=False, default=None, help='Weight for profit in the reward calculation.')
-    parser.add_argument('--penalty_reward_weight', type=float, required=False, default=None, help='Weight for penalty in the reward calculation.')
-    parser.add_argument('--trading_volume', type=float, required=False, default=None, help='Trading volume for each position.')
+    parser.add_argument('--trading_volume', type=float, required=False, default=None, help='Trading volume per transaction.')
+    parser.add_argument('--profit_target', type=float, required=False, default=None, help='Profit target relative to theoretical break-even distance.')
     parser.add_argument('--num_actors', type=int, required=False, default=None, help='Number of actors for ApeX training.')
     parser.add_argument('--n_step', type=int, required=False, default=None, help='Number of steps for N-step returns.')
     
@@ -87,14 +83,15 @@ def prepare_data(df: pd.DataFrame):
             **lob_transformer.hparams.dataset_config.__dict__,
             'target_cols': [],
         })
-        lob_dataloader = lob_dataset.to_dataloader(batch_size=1, shuffle=False)
+        lob_dataloader = lob_dataset.to_dataloader(batch_size=128, shuffle=False)
         
         predictions = trainer.predict(lob_transformer, lob_dataloader)
+        predictions = torch.cat(predictions, dim=0).cpu().numpy()
         
         df_subset = df.iloc[(window_size) - 1:].copy()
-        df_subset[f'downward_forecast_H{horizon}'] = [pred[0][0].item() for pred in predictions]
-        df_subset[f'stable_forecast_H{horizon}'] = [pred[0][1].item() for pred in predictions]
-        df_subset[f'upward_forecast_H{horizon}'] = [pred[0][2].item() for pred in predictions]
+        df_subset[f'downward_forecast_H{horizon}'] = [pred[0].item() for pred in predictions]
+        df_subset[f'stable_forecast_H{horizon}'] = [pred[1].item() for pred in predictions]
+        df_subset[f'upward_forecast_H{horizon}'] = [pred[2].item() for pred in predictions]
         
         df = pd.concat([df, df_subset.filter(regex=f'.*_H{horizon}$')], axis=1)
     
@@ -132,17 +129,23 @@ def main() -> None:
         ckpt_path = _args.get('ckpt_path', ckpt_path)
         method = _args.get('method')
         
+        _args.pop('preset', None)
+        _args.pop('mode', None)
+        _args.pop('csv_path', None)
+        _args.pop('ckpt_path', None)
+        _args.pop('method', None)
+        
         df = pd.read_csv(csv_path, index_col=0)
         df = prepare_data(df)
         
         if method == 'apex':
-            trainer = ApeXTrainer(df=df, model_path=model_path, **_args)
+            trainer = ApeXTrainer(df=df, model_path=model_path, **_args, ckpt_path=ckpt_path)
         elif method == 'ac':
-            trainer = ActorCriticTrainer(df=df, model_path=model_path, **_args)
+            trainer = ActorCriticTrainer(df=df, model_path=model_path, **_args, ckpt_path=ckpt_path)
         elif method == 'ddqn':
-            trainer = DDQNTrainer(df=df, model_path=model_path, **_args)
+            trainer = DDQNTrainer(df=df, model_path=model_path, **_args, ckpt_path=ckpt_path)
         elif method == 'dqn':
-            trainer = DQNTrainer(df=df, model_path=model_path, **_args)
+            trainer = DQNTrainer(df=df, model_path=model_path, **_args, ckpt_path=ckpt_path)
         else:
             raise ValueError(f"Unsupported method: {method}")
         

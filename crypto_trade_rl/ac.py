@@ -12,7 +12,7 @@ from lightning.pytorch import Trainer
 from lightning.pytorch import LightningModule
 from lightning.pytorch.callbacks import ModelCheckpoint
 
-from .environment import Actions, PositionType, CryptoExchangeEnv
+from .environment import CryptoTradeEnv
 
 
 class DummyDataset(Dataset):
@@ -54,7 +54,7 @@ class ActorCriticNetwork(nn.Module):
 
 
 class ACActor:
-    def __init__(self, env: CryptoExchangeEnv):
+    def __init__(self, env: CryptoTradeEnv):
         self.env = env
         self.state, _ = self.env.reset()
         self.episode_reward = 0.0
@@ -214,18 +214,12 @@ class ActorCritic(LightningModule):
         
         self.log('total_steps', env.current_step)
         self.log('episode_reward', episode_reward)
-        self.log('count_action_buy', len([x for x in env.history if x['action'] == Actions.BUY_AT_BEST_BID.value]))
-        self.log('count_action_sell', len([x for x in env.history if x['action'] == Actions.SELL_AT_BEST_ASK.value]))
-        self.log('count_action_hold', len([x for x in env.history if x['action'] == Actions.DO_NOTHING.value]))
-        self.log('last_cash', env.history[-1]['cash'])
-        self.log('last_long_positions', len([p for p in env.portfolio.positions if p.position_type == PositionType.LONG]))
-        self.log('last_short_positions', len([p for p in env.portfolio.positions if p.position_type == PositionType.SHORT]))
-        self.log('last_unrealized_pnl', env.history[-1]['unrealized_pnl'])
+        self.log('portfolio_value', info.get('total_value', 0.))
     
     def test_step(self, batch, batch_idx):
         pass
     
-    def set_envs(self, envs: list[CryptoExchangeEnv]):
+    def set_envs(self, envs: list[CryptoTradeEnv]):
         self.actors = [ACActor(env) for env in envs]
 
 
@@ -235,14 +229,10 @@ class ActorCriticTrainer:
                  gamma: float,
                  lr: float,
                  max_epochs: int,
-                 initial_cash: float,
+                 initial_collateral: float,
                  transaction_fee: float,
-                 max_positions: int,
-                 target_profit: float,
-                 holding_reward_weight: float,
-                 profit_reward_weight: float,
-                 penalty_reward_weight: float,
                  trading_volume: float,
+                 profit_target: float,
                  n_step: int,
                  num_actors: int,
                  model_path: str,
@@ -252,14 +242,10 @@ class ActorCriticTrainer:
         self.gamma = gamma
         self.lr = lr
         self.max_epochs = max_epochs
-        self.initial_cash = initial_cash
+        self.initial_collateral = initial_collateral
         self.transaction_fee = transaction_fee
-        self.max_positions = max_positions
-        self.target_profit = target_profit
-        self.holding_reward_weight = holding_reward_weight
-        self.profit_reward_weight = profit_reward_weight
-        self.penalty_reward_weight = penalty_reward_weight
         self.trading_volume = trading_volume
+        self.profit_target = profit_target
         self.n_step = n_step
         self.num_actors = num_actors
         self.model_path = model_path
@@ -271,17 +257,13 @@ class ActorCriticTrainer:
         # Create multiple environments for actors
         envs = []
         for _ in range(self.num_actors):
-            env = CryptoExchangeEnv(
+            env = CryptoTradeEnv(
                 data=self.df,
                 max_steps=int(len(self.df)) - 1,
-                initial_cash=self.initial_cash,
+                initial_collateral=self.initial_collateral,
                 transaction_fee=self.transaction_fee,
-                max_positions=self.max_positions,
-                target_profit=self.target_profit,
-                holding_reward_weight=self.holding_reward_weight,
-                profit_reward_weight=self.profit_reward_weight,
-                penalty_reward_weight=self.penalty_reward_weight,
                 trading_volume=self.trading_volume,
+                profit_target=self.profit_target,
                 feature_columns=self.df.columns.difference(['best_ask', 'best_bid']).tolist()
             )
             envs.append(env)
@@ -331,17 +313,13 @@ class ActorCriticTrainer:
     def evaluate(self, model_path: str):
         print("Evaluating Actor-Critic model...")
         
-        env = CryptoExchangeEnv(
+        env = CryptoTradeEnv(
             data=self.df,
             max_steps=int(len(self.df)) - 1,
-            initial_cash=self.initial_cash,
+            initial_collateral=self.initial_collateral,
             transaction_fee=self.transaction_fee,
-            max_positions=self.max_positions,
-            target_profit=self.target_profit,
-            holding_reward_weight=self.holding_reward_weight,
-            profit_reward_weight=self.profit_reward_weight,
-            penalty_reward_weight=self.penalty_reward_weight,
             trading_volume=self.trading_volume,
+            profit_target=self.profit_target,
             feature_columns=self.df.columns.difference(['best_ask', 'best_bid']).tolist()
         )
         

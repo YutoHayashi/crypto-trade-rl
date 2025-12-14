@@ -10,14 +10,10 @@
             "max_epochs": 10,
             "init_epsilon": 1.0,
             "min_epsilon": 0.01,
-            "initial_cash": 100000.0,
-            "transaction_fee": 0.001,
-            "max_positions": 1,
-            "target_profit": 0.01,
-            "holding_reward_weight": 0.01,
-            "profit_reward_weight": 1.0,
-            "penalty_reward_weight": 1.0,
-            "trading_volume": 0.01
+            "initial_collateral": 100000.0,
+            "transaction_fee": 1e-4,
+            "trading_volume": 0.01,
+            "profit_target": 1.0
         }
     ],
     "debug_ddqn": [
@@ -31,14 +27,10 @@
             "max_epochs": 10,
             "init_epsilon": 1.0,
             "min_epsilon": 0.01,
-            "initial_cash": 100000.0,
-            "transaction_fee": 0.001,
-            "max_positions": 1,
-            "target_profit": 0.01,
-            "holding_reward_weight": 0.01,
-            "profit_reward_weight": 1.0,
-            "penalty_reward_weight": 1.0,
-            "trading_volume": 0.01
+            "initial_collateral": 100000.0,
+            "transaction_fee": 1e-4,
+            "trading_volume": 0.01,
+            "profit_target": 1.0
         }
     ],
     "debug_apex": [
@@ -46,22 +38,18 @@
             "method": "apex",
             "csv_path": "csv/debug_data.csv",
             "gamma": 0.99,
-            "lr": 1e-4,
+            "lr": 1e-3,
             "buffer_size": 1000000,
             "batch_size": 256,
             "max_epochs": 10,
-            "max_epsilon": 0.85,
-            "min_epsilon": 0.25,
+            "max_epsilon": 0.95,
+            "min_epsilon": 0.15,
             "target_update_interval": 50,
-            "initial_cash": 1000000.0,
-            "transaction_fee": 0.001,
-            "max_positions": 1,
-            "target_profit": 0.01,
-            "holding_reward_weight": 0.01,
-            "profit_reward_weight": 1.0,
-            "penalty_reward_weight": 1.0,
+            "initial_collateral": 100000.0,
+            "transaction_fee": 1e-4,
             "trading_volume": 0.01,
-            "num_actors": 4,
+            "profit_target": 1.0,
+            "num_actors": 6,
             "n_step": 5
         }
     ],
@@ -70,18 +58,31 @@
             "method": "ac",
             "csv_path": "csv/debug_data.csv",
             "gamma": 0.99,
-            "lr": 1e-4,
+            "lr": 1e-3,
             "max_epochs": 10,
-            "initial_cash": 1000000.0,
-            "transaction_fee": 0.001,
-            "max_positions": 1,
-            "target_profit": 0.01,
-            "holding_reward_weight": 0.01,
-            "profit_reward_weight": 1.0,
-            "penalty_reward_weight": 1.0,
+            "initial_collateral": 100000.0,
+            "transaction_fee": 1e-4,
             "trading_volume": 0.01,
+            "profit_target": 1.0,
             "num_actors": 4,
             "n_step": 3
+        }
+    ],
+    "dev": [
+        {
+            "method": "ddqn",
+            "csv_path": "csv/train_data.csv",
+            "gamma": 0.99,
+            "lr": 1e-4,
+            "buffer_size": 100000,
+            "batch_size": 64,
+            "max_epochs": 100,
+            "init_epsilon": 1.0,
+            "min_epsilon": 0.01,
+            "initial_collateral": 100000.0,
+            "transaction_fee": 1e-4,
+            "trading_volume": 0.01,
+            "profit_target": 1.0
         }
     ]
 }
